@@ -1,0 +1,19 @@
+[package]
+name = "lighthouse"
+edition = "2024"
+version = "0.0.1"
+license = "Apache-2.0"
+
+[dependencies]
+# testnet-v17.0.0 — CURRENT_VERSION = 5, which is the highest version currently
+# enabled in the testnet Registry's allowed_versions set {1,2,3,4,5}.
+# The original pin (e6da254 / testnet-v19) had CURRENT_VERSION = 8, which
+# caused pool::load_inner to abort with EPackageVersionDisabled (abort code 11).
+deepbook = { git = "https://github.com/MystenLabs/deepbookv3.git", subdir = "packages/deepbook", rev = "5e4d23801011004a88c39018e105ca02b705f449" }
+
+[addresses]
+lighthouse = "0x150ae38deaf5a71e04106a6487a3779099ac1f19eeaffc1b7e83b6c43157f744"
+
+[dev-dependencies]
+
+[dev-addresses]
