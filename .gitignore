@@ -1,0 +1,77 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+bun.lock
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+.output/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Move build artifacts
+lighthouse_contract/build/
+
+# Root-level planning docs
+LIGHTHOUSE.md
+SUBMISSION_REMINDERS.md
+SUI_OVERFLOW_2026.md
+TRACKS_AGENTIC_DEEPBOOK_WALRUS.md
+PITCHDECK_AND_DEMO_SCRIPT.md
+PITCHDECK_SLIDES.md
+HYPERLIQUID_HACKATHON.md
+IDEAS_20.md
+PAST_WINNERS_ANALYSIS.md
+FAQ.md
+web/CLAUDE.md
+web/FRONTEND_STRUCTURE_GUIDE.md
+web/SECURITY.md
+web/WALRUS_SITES_DEPLOY.md
+web/README.md
+lighthouse_contract/README.md
+
+# Root PNG reference images
+*.png
+*.jpg
+*.jpeg
+
+# Memory and private notes
+memory/
+
+# Claude AI config
+.claude/
+
+# Playwright
+playwright.config.ts
+playwright-report/
+test-results/
+e2e/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+._*
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Prisma generated
+backend/prisma/generated/
+
+# Temp
+tmp/
+temp/
+*.tmp
