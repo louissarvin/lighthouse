@@ -78,6 +78,18 @@ model TraderProfile {
   /// Null = not completed.
   risk_profile_completed_at DateTime?
 
+  /// Walrus blob id of the user's public avatar image (PNG/JPEG/WebP).
+  /// Set via POST /profile/me/avatar. Served via the Walrus aggregator
+  /// URL: `${WALRUS_AGGREGATOR_URL}/v1/blobs/${avatar_blob_id}`.
+  /// Content-type validated at upload time on the client + at the API
+  /// boundary (allowlist mime). SVG explicitly rejected because the
+  /// aggregator returns `application/octet-stream` and an inline SVG
+  /// can carry an XSS payload.
+  avatar_blob_id String?
+  /// Free-form public bio (max 280 chars, trimmed). Empty string clears.
+  /// Set via POST /profile/me/bio.
+  bio            String?
+
   created_at DateTime  @default(now())
   updated_at DateTime  @updatedAt
   deleted_at DateTime?
