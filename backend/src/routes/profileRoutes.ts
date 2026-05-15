@@ -59,6 +59,59 @@ interface UpdateBlobBody {
   blobIdHex?: string;
 }
 
+/// Allowed avatar MIME types. SVG INTENTIONALLY EXCLUDED — the Walrus
+/// aggregator returns `application/octet-stream` for every blob, so a raw
+/// SVG would happily render as XSS if the frontend trusted the response
+/// content. PNG/JPEG/WebP have no script-execution surface in an <img> tag.
+const AVATAR_ALLOWED_MIME = new Set<string>(['image/png', 'image/jpeg', 'image/webp']);
+/// Walrus blob ids are URL-safe base64 of a 32-byte hash, ~43 chars. We
+/// accept a slightly wider window (32-64) to tolerate aggregator encoding
+/// drift but reject obviously malformed inputs.
+const BLOB_ID_MIN = 32;
+const BLOB_ID_MAX = 64;
+const BLOB_ID_RE = /^[A-Za-z0-9_-]+$/;
+const BIO_MAX = 280;
+
+interface AvatarBody {
+  blobId?: string;
+  mimeType?: string;
+}
+
+interface BioBody {
+  bio?: string;
+}
+
+/// Lightweight TTL cache for the by-suins enrichment payload. Invalidated
+/// in-process when /profile/me/avatar or /profile/me/bio mutates the user's
+/// row so the public page reflects the change within one request.
+const BY_SUINS_CACHE = new Map<string, { value: unknown; expires: number }>();
+const BY_SUINS_TTL_MS = 30 * 1000;
+
+function bySuinsCacheKey(name: string): string {
+  return `by-suins:${name.toLowerCase()}`;
+}
+
+function invalidateBySuinsCache(name?: string | null): void {
+  if (!name) return;
+  BY_SUINS_CACHE.delete(bySuinsCacheKey(name));
+}
+
+/// BigInt division producing a fixed-precision decimal string. Used to render
+/// FLOAT_SCALING'd notionals (1e9 scale) as human DBUSDC. Pure integer math
+/// keeps full precision — never go through `Number` for money values.
+function bigIntDivToDecimalString(value: bigint, scale: bigint): string {
+  if (scale <= 0n) throw new Error('scale must be positive');
+  const negative = value < 0n;
+  const abs = negative ? -value : value;
+  const whole = abs / scale;
+  const frac = abs % scale;
+  // 9-digit fractional component for 1e9 scale; trim trailing zeros for
+  // display compactness while still being exact.
+  const fracStr = frac.toString().padStart(scale.toString().length - 1, '0').replace(/0+$/, '');
+  const out = fracStr.length === 0 ? whole.toString() : `${whole.toString()}.${fracStr}`;
+  return negative ? `-${out}` : out;
+}
+
 export const profileRoutes: FastifyPluginCallback = (app: FastifyInstance, _opts, done) => {
   app.post(
     '/record-trader-profile-id',
@@ -173,6 +226,131 @@ export const profileRoutes: FastifyPluginCallback = (app: FastifyInstance, _opts
     },
   );
 
+  // ─── Shared enrichment helper for public profile reads ─────────────────
+  //
+  // Computes the canonical public profile payload for an already-fetched
+  // TraderProfile row. Used by /profile/by-suins/:name and
+  // /profile/by-address/:address so both surfaces stay byte-identical
+  // and an additional metric never gets added in one place but not the
+  // other. PnL / win-rate INTENTIONALLY OMITTED per product brief: the
+  // executor wrapper records `executor::TradeExecuted` but DeepBook-side
+  // settled-fill PnL is not derivable without a full fill-by-fill replay.
+  async function enrichProfile(profile: {
+    id: string;
+    sui_address: string;
+    suins_name: string | null;
+    profile_object_id: string | null;
+    balance_manager_id: string | null;
+    executor_agent_id: string | null;
+    avatar_blob_id: string | null;
+    bio: string | null;
+    created_at: Date;
+  }) {
+    const [
+      tradesCount,
+      anchorsCount,
+      notionalAgg,
+      latestTearsheet,
+      recentTrades,
+    ] = await Promise.all([
+      prismaQuery.trade.count({
+        where: { trader_profile_id: profile.id, deleted_at: null },
+      }),
+      // AnchorRecorded events are indexed by EventIndexer.handleAnchorRecorded
+      // into WalrusBlob with `owner_address` set. Counting by owner is the
+      // closest per-user proxy. Fast — index-only count on owner_address.
+      prismaQuery.walrusBlob.count({
+        where: {
+          owner_address: profile.sui_address,
+          deleted_at: null,
+          tx_digest: { not: null },
+        },
+      }),
+      // sum(notional) → BigInt; then we convert to DBUSDC human units
+      // (FLOAT_SCALING = 1e9 per Trade.notional column comment). Decimal
+      // string so we don't lose precision in JSON.
+      prismaQuery.trade.aggregate({
+        where: { trader_profile_id: profile.id, deleted_at: null },
+        _sum: { notional: true },
+      }),
+      prismaQuery.weeklyTearsheet.findFirst({
+        where: { trader_profile_id: profile.id, deleted_at: null },
+        orderBy: { window_to: 'desc' },
+        select: {
+          week: true,
+          quilt_blob_id: true,
+          tearsheet_identifier: true,
+          audit_anchor_tx: true,
+          window_from: true,
+          window_to: true,
+          total_trades: true,
+        },
+      }),
+      prismaQuery.trade.findMany({
+        where: { trader_profile_id: profile.id, deleted_at: null },
+        orderBy: { created_at: 'desc' },
+        take: 10,
+        select: {
+          side: true,
+          price: true,
+          quantity: true,
+          notional: true,
+          walrus_blob_id: true,
+          tx_digest: true,
+          created_at: true,
+        },
+      }),
+    ]);
+
+    const totalNotionalRaw = notionalAgg._sum.notional ?? 0n;
+    const totalNotional = bigIntDivToDecimalString(totalNotionalRaw, 1_000_000_000n);
+    const avatarUrl = profile.avatar_blob_id
+      ? `${WALRUS_AGGREGATOR_URL}/v1/blobs/${profile.avatar_blob_id}`
+      : null;
+
+    return {
+      suinsName: profile.suins_name,
+      suiAddress: profile.sui_address,
+      profileObjectId: profile.profile_object_id,
+      balanceManagerId: profile.balance_manager_id,
+      executorAgentId: profile.executor_agent_id,
+      avatarBlobId: profile.avatar_blob_id,
+      avatarUrl,
+      bio: profile.bio,
+      memberSinceMs: profile.created_at.getTime(),
+      createdAt: profile.created_at,
+      walrusSiteObjectId: null,
+      counts: {
+        tradesPlaced: tradesCount,
+        // Renamed in spirit: per-user count instead of protocol-wide.
+        anchorCount: anchorsCount,
+      },
+      tradesPlaced: tradesCount,
+      anchorCount: anchorsCount,
+      totalNotional,
+      recentTrades: recentTrades.map((t) => ({
+        side: t.side,
+        price: t.price.toString(),
+        quantity: t.quantity.toString(),
+        notional: t.notional.toString(),
+        walrusBlobId: t.walrus_blob_id,
+        txDigest: t.tx_digest,
+        createdAt: t.created_at,
+      })),
+      latestTearsheet: latestTearsheet
+        ? {
+            week: latestTearsheet.week,
+            walrusBlobId: latestTearsheet.quilt_blob_id,
+            auditAnchorTxDigest: latestTearsheet.audit_anchor_tx,
+            windowFrom: latestTearsheet.window_from,
+            windowTo: latestTearsheet.window_to,
+            totalTrades: latestTearsheet.total_trades,
+            publicTearsheetUrl: `${WALRUS_AGGREGATOR_URL}/v1/blobs/by-quilt-id/${latestTearsheet.quilt_blob_id}/${latestTearsheet.tearsheet_identifier}`,
+          }
+        : null,
+    };
+  }
+
   // ─── GET /profile/by-suins/:name ────────────────────────────────────────
   // Public, unauthenticated read for shareable `/u/<name>` pages.
   //
@@ -198,6 +376,11 @@ export const profileRoutes: FastifyPluginCallback = (app: FastifyInstance, _opts
       const { name } = request.params as { name: string };
       if (!name) return handleError(reply, 400, 'missing name', 'MISSING_PARAM');
       try {
+        const cacheKey = bySuinsCacheKey(name);
+        const cached = BY_SUINS_CACHE.get(cacheKey);
+        if (cached && cached.expires > Date.now()) {
+          return reply.code(200).send({ success: true, error: null, data: cached.value });
+        }
         const address = await resolveSuiNS(name);
         if (!address) return handleNotFoundError(reply, `SuiNS name "${name}"`);
         const profile = await prismaQuery.traderProfile.findUnique({
@@ -205,72 +388,167 @@ export const profileRoutes: FastifyPluginCallback = (app: FastifyInstance, _opts
         });
         if (!profile) return handleNotFoundError(reply, 'TraderProfile');
 
-        // Parallel aggregates + latest tearsheet metadata. Counts are scoped
-        // to the resolved trader profile so unrelated address activity does
-        // not leak into the public profile.
-        const [tradesCount, anchorsCount, latestTearsheet] = await Promise.all(
-          [
-            prismaQuery.trade.count({
-              where: { trader_profile_id: profile.id, deleted_at: null },
-            }),
-            prismaQuery.walrusBlob.count({
-              where: {
-                deleted_at: null,
-                tx_digest: { not: null },
-                // WalrusBlob is global (no trader_profile_id column) — we
-                // intentionally surface the protocol-wide count here so the
-                // public profile shows the Lighthouse heartbeat, not a
-                // misleading per-user value. The frontend label reflects
-                // this with "anchors recorded by Lighthouse".
-              },
-            }),
-            prismaQuery.weeklyTearsheet.findFirst({
-              where: { trader_profile_id: profile.id, deleted_at: null },
-              orderBy: { window_to: 'desc' },
-              select: {
-                week: true,
-                quilt_blob_id: true,
-                tearsheet_identifier: true,
-                audit_anchor_tx: true,
-                window_from: true,
-                window_to: true,
-                total_trades: true,
-              },
-            }),
-          ],
-        );
+        const data = await enrichProfile({
+          id: profile.id,
+          sui_address: profile.sui_address,
+          suins_name: profile.suins_name ?? name,
+          profile_object_id: profile.profile_object_id,
+          balance_manager_id: profile.balance_manager_id,
+          executor_agent_id: profile.executor_agent_id,
+          avatar_blob_id: profile.avatar_blob_id,
+          bio: profile.bio,
+          created_at: profile.created_at,
+        });
+        BY_SUINS_CACHE.set(cacheKey, { value: data, expires: Date.now() + BY_SUINS_TTL_MS });
+        return reply.code(200).send({ success: true, error: null, data });
+      } catch (e) {
+        return handleServerError(reply, e as Error);
+      }
+    },
+  );
 
+  // ─── GET /profile/by-address/:address ──────────────────────────────────
+  // Public mirror of /by-suins for direct address lookups (when the user
+  // has no SuiNS apex set). Same enrichment payload.
+  app.get(
+    '/by-address/:address',
+    {
+      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { address } = request.params as { address: string };
+      if (!address) return handleError(reply, 400, 'missing address', 'MISSING_PARAM');
+      if (!/^0x[a-f0-9]{64}$/i.test(address)) {
+        return handleError(reply, 400, 'invalid sui address', 'BAD_ADDRESS');
+      }
+      try {
+        const profile = await prismaQuery.traderProfile.findUnique({
+          where: { sui_address: address.toLowerCase() },
+        });
+        if (!profile) return handleNotFoundError(reply, 'TraderProfile');
+        const data = await enrichProfile({
+          id: profile.id,
+          sui_address: profile.sui_address,
+          suins_name: profile.suins_name,
+          profile_object_id: profile.profile_object_id,
+          balance_manager_id: profile.balance_manager_id,
+          executor_agent_id: profile.executor_agent_id,
+          avatar_blob_id: profile.avatar_blob_id,
+          bio: profile.bio,
+          created_at: profile.created_at,
+        });
+        return reply.code(200).send({ success: true, error: null, data });
+      } catch (e) {
+        return handleServerError(reply, e as Error);
+      }
+    },
+  );
+
+  // ─── POST /profile/me/avatar ───────────────────────────────────────────
+  //
+  // Body: { blobId, mimeType }. We persist `avatar_blob_id` only; the
+  // mimeType is validated as an allowlist (image/png|jpeg|webp) so the
+  // caller can't slip in `image/svg+xml` which would XSS when the
+  // aggregator returns octet-stream and the browser sniffs content.
+  //
+  // The actual blob bytes are NOT proxied through this server — we trust
+  // the client to have uploaded a real PNG/JPEG/WebP to Walrus. A future
+  // upgrade can fetch the first 12 bytes from the aggregator and verify
+  // the magic-byte header server-side; for v1, mime-allowlist + frontend
+  // contract is the agreed boundary per the brief.
+  app.post(
+    '/me/avatar',
+    {
+      preHandler: [authMiddleware],
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const user = request.user;
+      if (!user?.sui_address) {
+        return handleError(reply, 401, 'no bound sui address', 'NO_SUI_ADDRESS');
+      }
+      const body = request.body as AvatarBody;
+      const missing: string[] = [];
+      if (typeof body?.blobId !== 'string' || body.blobId.length === 0) missing.push('blobId');
+      if (typeof body?.mimeType !== 'string' || body.mimeType.length === 0) missing.push('mimeType');
+      if (missing.length) return handleValidationError(reply, missing);
+
+      const blobId = body.blobId!.trim();
+      const mimeType = body.mimeType!.trim().toLowerCase();
+      if (blobId.length < BLOB_ID_MIN || blobId.length > BLOB_ID_MAX || !BLOB_ID_RE.test(blobId)) {
+        return handleError(
+          reply,
+          400,
+          `blobId must be ${BLOB_ID_MIN}-${BLOB_ID_MAX} URL-safe base64 characters`,
+          'BAD_BLOB_ID',
+        );
+      }
+      if (!AVATAR_ALLOWED_MIME.has(mimeType)) {
+        return handleError(
+          reply,
+          400,
+          'mimeType must be image/png, image/jpeg, or image/webp',
+          'BAD_MIME',
+        );
+      }
+
+      try {
+        const updated = await prismaQuery.traderProfile.update({
+          where: { sui_address: user.sui_address },
+          data: { avatar_blob_id: blobId },
+          select: { avatar_blob_id: true, suins_name: true },
+        });
+        invalidateBySuinsCache(updated.suins_name);
+        const avatarUrl = `${WALRUS_AGGREGATOR_URL}/v1/blobs/${updated.avatar_blob_id}`;
         return reply.code(200).send({
           success: true,
           error: null,
-          data: {
-            suinsName: profile.suins_name ?? name,
-            suiAddress: address,
-            profileObjectId: profile.profile_object_id,
-            balanceManagerId: profile.balance_manager_id,
-            executorAgentId: profile.executor_agent_id,
-            // walrus_site_id lives on the user's SuiNSRegistration NFT
-            // metadata, not in our DB. The frontend can resolve it via
-            // an explorer query against the NFT if needed; we don't
-            // proxy that read here to keep this endpoint DB-only.
-            walrusSiteObjectId: null,
-            createdAt: profile.created_at,
-            counts: {
-              tradesPlaced: tradesCount,
-              lighthouseAnchorsTotal: anchorsCount,
-            },
-            latestTearsheet: latestTearsheet
-              ? {
-                  week: latestTearsheet.week,
-                  walrusBlobId: latestTearsheet.quilt_blob_id,
-                  auditAnchorTxDigest: latestTearsheet.audit_anchor_tx,
-                  windowFrom: latestTearsheet.window_from,
-                  windowTo: latestTearsheet.window_to,
-                  totalTrades: latestTearsheet.total_trades,
-                  publicTearsheetUrl: `${WALRUS_AGGREGATOR_URL}/v1/blobs/by-quilt-id/${latestTearsheet.quilt_blob_id}/${latestTearsheet.tearsheet_identifier}`,
-                }
-              : null,
-          },
+          data: { avatarBlobId: updated.avatar_blob_id, avatarUrl },
+        });
+      } catch (e) {
+        return handleServerError(reply, e as Error);
+      }
+    },
+  );
+
+  // ─── POST /profile/me/bio ──────────────────────────────────────────────
+  //
+  // Body: { bio }. Trimmed, capped at 280 chars. Empty string clears the
+  // column (stored as NULL so future queries can short-circuit cleanly).
+  // No HTML/markdown processing here — the frontend is expected to render
+  // bio as plain text via React's default escaping. Anything that looks
+  // like HTML stays escaped on render; we don't strip server-side because
+  // strip-on-write loses round-trip fidelity and the canonical defense is
+  // context-aware output encoding at render time (OWASP XSS cheat sheet).
+  app.post(
+    '/me/bio',
+    {
+      preHandler: [authMiddleware],
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const user = request.user;
+      if (!user?.sui_address) {
+        return handleError(reply, 401, 'no bound sui address', 'NO_SUI_ADDRESS');
+      }
+      const body = request.body as BioBody;
+      if (typeof body?.bio !== 'string') return handleValidationError(reply, ['bio']);
+      const trimmed = body.bio.trim();
+      if (trimmed.length > BIO_MAX) {
+        return handleError(reply, 400, `bio must be <= ${BIO_MAX} chars`, 'BIO_TOO_LONG');
+      }
+      const value = trimmed.length === 0 ? null : trimmed;
+      try {
+        const updated = await prismaQuery.traderProfile.update({
+          where: { sui_address: user.sui_address },
+          data: { bio: value },
+          select: { bio: true, suins_name: true },
+        });
+        invalidateBySuinsCache(updated.suins_name);
+        return reply.code(200).send({
+          success: true,
+          error: null,
+          data: { bio: updated.bio },
         });
       } catch (e) {
         return handleServerError(reply, e as Error);
