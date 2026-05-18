@@ -45,6 +45,10 @@ import type {
 
 import { prismaQuery } from '../lib/prisma.ts';
 import { handleServerError } from '../utils/errorHandler.ts';
+import { getAutoDepositSweeperStatus } from '../workers/autoDepositSweeper.ts';
+import { getPredictSettlementStatus } from '../workers/predictSettlementWorker.ts';
+import { getWeeklyTearsheetStatus } from '../workers/weeklyTearsheet.ts';
+import { getEventIndexerStatus } from '../services/EventIndexer.ts';
 
 // TODO: wire `current_epoch` from `suiRpc.getLatestSuiSystemState()` and
 // subtract a `LIGHTHOUSE_FIRST_DEPLOY_EPOCH` env var. Until that lands the
@@ -102,6 +106,69 @@ export const statsRoutes: FastifyPluginCallback = (
             walrus_epochs_active: WALRUS_EPOCHS_ACTIVE_FALLBACK,
             active_traders: nullIfZero(activeUserCount),
             last_updated_ms: Date.now(),
+          },
+        });
+      } catch (e) {
+        return handleServerError(reply, e as Error);
+      }
+    },
+  );
+
+  // ─── GET /stats/workers ────────────────────────────────────────────────
+  //
+  // Live worker health snapshot for the AppNav WorkerPill.
+  //
+  // The frontend (`web/src/components/ui/AppNav.tsx`) polls this every few
+  // seconds via TanStack Query and renders a green/yellow/red dot based on
+  // `all_ok` + `rate_limited_until_ms`. Status is computed from module-level
+  // counters exported by each worker / EventIndexer (no extra DB round-trip).
+  //
+  // Public read; aggregate-only data, no PII, no per-user info. Higher rate
+  // limit than /api/stats because polling fan-out from multiple SPA tabs is
+  // expected; payload is constant-size and computed in O(1).
+  //
+  // Response shape conforms to `web/src/lib/types.ts WorkerStatsResponse`:
+  //   { workers: WorkerStatus[], latest_run_ms: number | null, all_ok: boolean }
+  // and each WorkerStatus carries the worker-specific `extra` map per the
+  // brief so we can surface metrics like `last_sweep_amount_mist` or
+  // `pending_count` without changing the contract per-worker.
+  app.get(
+    '/stats/workers',
+    {
+      config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
+    },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const workers = [
+          getAutoDepositSweeperStatus(),
+          getPredictSettlementStatus(),
+          getWeeklyTearsheetStatus(),
+          getEventIndexerStatus(),
+        ];
+
+        const runTimestamps = workers
+          .map((w) => w.last_run_at_ms)
+          .filter((t): t is number => t !== null);
+        const latest_run_ms = runTimestamps.length ? Math.max(...runTimestamps) : null;
+        const nowMs = Date.now();
+        const all_ok = workers.every(
+          (w) =>
+            w.ok &&
+            (w.rate_limited_until_ms === null || w.rate_limited_until_ms <= nowMs),
+        );
+
+        // 5s edge cache; aligns with the StatsStrip cache hint and keeps a
+        // refreshing dashboard from pegging the DB-free status accessors.
+        reply.header('cache-control', 'public, max-age=5');
+
+        return reply.code(200).send({
+          success: true,
+          error: null,
+          data: {
+            workers,
+            latest_run_ms,
+            all_ok,
+            generated_at_ms: nowMs,
           },
         });
       } catch (e) {
