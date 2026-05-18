@@ -337,8 +337,44 @@ async function pollOnce(tracked: TrackedEvent): Promise<{ processed: number; adv
 
 let _stop = false;
 
+// ─── Status tracking (consumed by GET /stats/workers) ──────────────────────
+let lastRunAtMs: number | null = null;
+let lastRunDurationMs: number | null = null;
+let lastTickOk: boolean = true;
+let lastEventsProcessed: number = 0;
+let lastDeadLetteredCount: number = 0;
+let rateLimitedUntilMs: number | null = null;
+
 export function stopEventIndexer(): void {
   _stop = true;
+}
+
+export interface EventIndexerStatus {
+  name: 'eventIndexer';
+  last_run_at_ms: number | null;
+  last_run_duration_ms: number | null;
+  ok: boolean;
+  rate_limited_until_ms: number | null;
+  extra: {
+    last_events_processed: number;
+    last_dead_lettered: number;
+    stopped: boolean;
+  };
+}
+
+export function getEventIndexerStatus(): EventIndexerStatus {
+  return {
+    name: 'eventIndexer',
+    last_run_at_ms: lastRunAtMs,
+    last_run_duration_ms: lastRunDurationMs,
+    ok: lastTickOk,
+    rate_limited_until_ms: rateLimitedUntilMs,
+    extra: {
+      last_events_processed: lastEventsProcessed,
+      last_dead_lettered: lastDeadLetteredCount,
+      stopped: _stop,
+    },
+  };
 }
 
 /**
@@ -348,15 +384,20 @@ export function stopEventIndexer(): void {
 export async function startEventIndexer(): Promise<void> {
   console.log('[EventIndexer] starting');
   while (!_stop) {
+    const tickStart = Date.now();
     const tracked = getTrackedEvents();
     if (!tracked.length) {
       console.warn('[EventIndexer] no events tracked yet — set LIGHTHOUSE_PACKAGE_ID + DEEPBOOK_PACKAGE_ID');
+      lastRunAtMs = Date.now();
+      lastRunDurationMs = lastRunAtMs - tickStart;
+      lastTickOk = false;
       await sleep(10_000);
       continue;
     }
     let totalProcessed = 0;
     let anyAdvanced = false;
     let totalDeadLettered = 0;
+    let tickOk = true;
     for (const t of tracked) {
       try {
         const { processed, advanced, deadLettered } = await pollOnce(t);
@@ -375,10 +416,12 @@ export async function startEventIndexer(): Promise<void> {
           msg.includes('resource_exhausted') ||
           msg.includes('resource exhausted') ||
           code === 'RESOURCE_EXHAUSTED';
+        tickOk = false;
         if (rateLimited) {
           console.warn(
             `[EventIndexer] pollOnce(${t.id}) rate-limited, backing off 60s`,
           );
+          rateLimitedUntilMs = Date.now() + 60_000;
           await sleep(60_000);
         } else {
           console.error(`[EventIndexer] pollOnce(${t.id}) failed:`, e);
@@ -389,6 +432,11 @@ export async function startEventIndexer(): Promise<void> {
     if (totalDeadLettered > 0) {
       console.warn(`[EventIndexer] ${totalDeadLettered} event(s) dead-lettered this cycle`);
     }
+    lastRunAtMs = Date.now();
+    lastRunDurationMs = lastRunAtMs - tickStart;
+    lastTickOk = tickOk;
+    lastEventsProcessed = totalProcessed;
+    lastDeadLetteredCount = totalDeadLettered;
     // backoff if nothing happened
     if (totalProcessed === 0 && !anyAdvanced) {
       await sleep(EVENT_INDEXER_RECONNECT_MS);

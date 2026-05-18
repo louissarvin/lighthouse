@@ -15,6 +15,13 @@ import { runWeeklyForAllProfiles } from '../services/WeeklyTearsheet.ts';
 
 let isRunning = false;
 
+// ─── Status tracking (consumed by GET /stats/workers) ──────────────────────
+let lastRunAtMs: number | null = null;
+let lastRunDurationMs: number | null = null;
+let lastTickOk: boolean = true;
+let lastSucceeded: number = 0;
+let lastFailed: number = 0;
+
 const run = async (): Promise<void> => {
   if (isRunning) {
     console.log('[WeeklyTearsheet] previous run still active, skipping');
@@ -24,13 +31,19 @@ const run = async (): Promise<void> => {
   const t0 = Date.now();
   try {
     const { succeeded, failed } = await runWeeklyForAllProfiles(new Date());
+    lastSucceeded = succeeded;
+    lastFailed = failed;
+    lastTickOk = failed === 0;
     console.log(
       `[WeeklyTearsheet] completed in ${((Date.now() - t0) / 1000).toFixed(1)}s — ` +
         `succeeded=${succeeded} failed=${failed}`,
     );
   } catch (e) {
+    lastTickOk = false;
     console.error('[WeeklyTearsheet] uncaught:', e);
   } finally {
+    lastRunAtMs = Date.now();
+    lastRunDurationMs = lastRunAtMs - t0;
     isRunning = false;
   }
 };
@@ -47,4 +60,32 @@ export { run as runWeeklyTearsheetNow };
 /// Useful for health checks to detect long-running tearsheet jobs.
 export function isWeeklyTearsheetRunning(): boolean {
   return isRunning;
+}
+
+export interface WeeklyTearsheetStatus {
+  name: 'weeklyTearsheet';
+  last_run_at_ms: number | null;
+  last_run_duration_ms: number | null;
+  ok: boolean;
+  rate_limited_until_ms: number | null;
+  extra: {
+    last_succeeded: number;
+    last_failed: number;
+    is_running: boolean;
+  };
+}
+
+export function getWeeklyTearsheetStatus(): WeeklyTearsheetStatus {
+  return {
+    name: 'weeklyTearsheet',
+    last_run_at_ms: lastRunAtMs,
+    last_run_duration_ms: lastRunDurationMs,
+    ok: lastTickOk,
+    rate_limited_until_ms: null,
+    extra: {
+      last_succeeded: lastSucceeded,
+      last_failed: lastFailed,
+      is_running: isRunning,
+    },
+  };
 }

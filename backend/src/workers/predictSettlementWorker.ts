@@ -31,6 +31,13 @@ import { buildTelegramOAuthFlow } from '../lib/zklogin.ts';
 
 let isRunning = false;
 
+// ─── Status tracking (consumed by GET /stats/workers) ──────────────────────
+let lastRunAtMs: number | null = null;
+let lastRunDurationMs: number | null = null;
+let lastTickOk: boolean = true;
+let lastSettledCount: number = 0;
+let lastOpenScanned: number = 0;
+
 interface OracleObjectResponse {
   result?: {
     data?: {
@@ -51,6 +58,8 @@ async function checkSettledPositions(): Promise<void> {
     return;
   }
   isRunning = true;
+  const startedAt = Date.now();
+  let settledThisTick = 0;
   try {
     const positions = await prismaQuery.hedgePosition.findMany({
       where: { status: 'open', deleted_at: null },
@@ -60,6 +69,7 @@ async function checkSettledPositions(): Promise<void> {
         },
       },
     });
+    lastOpenScanned = positions.length;
 
     for (const pos of positions) {
       try {
@@ -168,6 +178,7 @@ async function checkSettledPositions(): Promise<void> {
             settled_at: new Date(),
           },
         });
+        settledThisTick += 1;
 
         const chatId = pos.trader_profile?.telegram?.telegram_chat_id;
         if (!chatId) {
@@ -304,9 +315,14 @@ async function checkSettledPositions(): Promise<void> {
         );
       }
     }
+    lastTickOk = true;
   } catch (e) {
+    lastTickOk = false;
     console.error('[settlement] tick failed:', (e as Error).message);
   } finally {
+    lastRunAtMs = Date.now();
+    lastRunDurationMs = lastRunAtMs - startedAt;
+    lastSettledCount = settledThisTick;
     isRunning = false;
   }
 }
@@ -316,4 +332,32 @@ export function startPredictSettlementWorker(): void {
   cron.schedule('*/2 * * * *', () => void checkSettledPositions());
   // Run immediately on boot so positions that already settled get notified.
   void checkSettledPositions();
+}
+
+export interface PredictSettlementStatus {
+  name: 'predictSettlementWorker';
+  last_run_at_ms: number | null;
+  last_run_duration_ms: number | null;
+  ok: boolean;
+  rate_limited_until_ms: number | null;
+  extra: {
+    last_open_scanned: number;
+    last_settled_count: number;
+    is_running: boolean;
+  };
+}
+
+export function getPredictSettlementStatus(): PredictSettlementStatus {
+  return {
+    name: 'predictSettlementWorker',
+    last_run_at_ms: lastRunAtMs,
+    last_run_duration_ms: lastRunDurationMs,
+    ok: lastTickOk,
+    rate_limited_until_ms: null,
+    extra: {
+      last_open_scanned: lastOpenScanned,
+      last_settled_count: lastSettledCount,
+      is_running: isRunning,
+    },
+  };
 }

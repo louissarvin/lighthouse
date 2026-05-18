@@ -76,6 +76,18 @@ const SWEEP_CRON = '*/15 * * * * *'; // every 15s (6-field cron)
 let isRunning = false;
 let cronTask: cron.ScheduledTask | null = null;
 
+// ─── Status tracking (consumed by GET /stats/workers) ──────────────────────
+//
+// Module-level mutable state updated on each tick. Exported via
+// getAutoDepositSweeperStatus() so the worker stats endpoint can render an
+// at-a-glance health view without coupling to internal Prisma rows.
+let lastRunAtMs: number | null = null;
+let lastRunDurationMs: number | null = null;
+let lastTickOk: boolean = true;
+let lastSweepedCount: number = 0;
+let lastSweepedAmountMist: bigint = 0n;
+let rateLimitedUntilMs: number | null = null;
+
 /**
  * One sweep pass: process at most `MAX_CLAIMS_PER_TICK` claims to bound
  * worst-case tick duration.
@@ -367,6 +379,8 @@ async function processOneSweep(): Promise<void> {
       const digest = claimState.digest;
       claimedTotalForGasCheck += intent.amount_mist;
       claimsThisTick++;
+      lastSweepedCount += 1;
+      lastSweepedAmountMist += intent.amount_mist;
       console.log(
         `[autoDeposit] swept ${intent.amount_mist} MIST from ${transfer.senderAddress} ` +
           `for ${intent.trader_profile_id} (tx ${digest.slice(0, 12)}…)`,
@@ -403,12 +417,20 @@ const tick = async (): Promise<void> => {
     return;
   }
   isRunning = true;
+  // Reset per-tick counters so status reflects the most recent tick only.
+  lastSweepedCount = 0;
+  lastSweepedAmountMist = 0n;
+  const startedAt = Date.now();
   try {
     await expireStaleIntents();
     await processOneSweep();
+    lastTickOk = true;
   } catch (e) {
+    lastTickOk = false;
     console.error('[autoDeposit] tick failed:', (e as Error).message);
   } finally {
+    lastRunAtMs = Date.now();
+    lastRunDurationMs = lastRunAtMs - startedAt;
     isRunning = false;
   }
 };
@@ -436,3 +458,29 @@ export const stopAutoDepositSweeper = (): void => {
 
 /// Returns true while a sweep tick is running. Use for health checks.
 export const isAutoDepositSweeperRunning = (): boolean => isRunning;
+
+export interface AutoDepositSweeperStatus {
+  name: 'autoDepositSweeper';
+  last_run_at_ms: number | null;
+  last_run_duration_ms: number | null;
+  ok: boolean;
+  rate_limited_until_ms: number | null;
+  extra: {
+    last_sweep_claim_count: number;
+    last_sweep_amount_mist: string;
+    is_running: boolean;
+  };
+}
+
+export const getAutoDepositSweeperStatus = (): AutoDepositSweeperStatus => ({
+  name: 'autoDepositSweeper',
+  last_run_at_ms: lastRunAtMs,
+  last_run_duration_ms: lastRunDurationMs,
+  ok: lastTickOk,
+  rate_limited_until_ms: rateLimitedUntilMs,
+  extra: {
+    last_sweep_claim_count: lastSweepedCount,
+    last_sweep_amount_mist: lastSweepedAmountMist.toString(),
+    is_running: isRunning,
+  },
+});
