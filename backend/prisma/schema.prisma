@@ -1,0 +1,499 @@
+// Lighthouse backend schema (PostgreSQL).
+//
+// Rules:
+//   - soft-delete via `deleted_at` (never hard DELETE)
+//   - foreign keys on every relationship
+//   - created_at / updated_at on every mutable table
+//   - all u64 / amounts stored as BigInt (Postgres BIGINT)
+//   - `EXPLAIN ANALYZE` every new query before deploy
+//
+// See `memory/lighthouse_testnet_plan_2026_06.md` for testnet IDs that map into
+// the on-chain fields below.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "./generated"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// === Core: per-user identity binding ===
+
+/// One per Sui address. Mirrors the on-chain `lighthouse::trader_profile::TraderProfile`
+/// shared object plus the user's BalanceManager + ExecutorAgent + MemWal account.
+model TraderProfile {
+  id                  String   @id @default(cuid())
+  sui_address         String   @unique
+  /// On-chain object IDs (all 0x-prefixed strings).
+  profile_object_id   String   @unique
+  balance_manager_id  String?
+  executor_agent_id   String?
+  /// On-chain `DepositCap` object ID held by the backend executor. Minted by the
+  /// BM owner during setup and transferred to the executor so the backend can call
+  /// `balance_manager::deposit_with_cap` without the user having to sign again.
+  deposit_cap_id      String?
+  /// On-chain `PredictManager` object ID owned by this user's zkLogin address.
+  /// Created on first /predict use and deposited with DUSDC.
+  predict_manager_id  String?
+  memwal_account_id   String?
+  /// Server-side delegate key for this user's MemWal account.
+  /// Stored as AES-256-GCM envelope ciphertext: `${iv_b64}:${ciphertext_b64}:${tag_b64}`.
+  /// Master key sourced from `MEMWAL_DELEGATE_ENCRYPTION_KEY` env var.
+  /// Per LIGHTHOUSE.md §7.4: the delegate key authorises the backend to write
+  /// memories on behalf of the user. The user's main key NEVER leaves their wallet.
+  memwal_delegate_key_encrypted String?
+  /// Cached snapshot of the on-chain ExecutorAgent fields. Refreshed on:
+  ///   - executor_agent_id assignment
+  ///   - AgentCreated event
+  ///   - explicit /profile/refresh-agent-state route call
+  ///   - lazy-on-read in /coach/recommend if older than 60s
+  executor_agent_cache_json Json?
+  /// Unix ms when executor_agent_cache_json was last refreshed.
+  executor_agent_cache_at  DateTime?
+  /// In-Move data version field for the package. Bumped by `version::migrate`.
+  version             Int      @default(1)
+  /// Cached `latest_blobs` slice -> blob_id (JSON for flexibility; on-chain Table is authoritative).
+  latest_blobs        Json?
+  /// Optional: SuiNS apex SLD for tearsheet URLs.
+  suins_name          String?
+  /// SuiNS `SuinsRegistration` NFT object id (owned). Required to write
+  /// `walrus_site_id` metadata back to the user's `.sui` name (LIGHTHOUSE.md §14.3).
+  suins_nft_id        String?
+
+  /// Sui Stack Messaging group UUIDs (created at onboarding, persisted because
+  /// `createAndShareGroup` does not return the uuid — we pre-generate).
+  coach_group_uuid    String?
+  audit_group_uuid    String?
+
+  /// Set when the user has finished the 5-question risk-profile wizard
+  /// (`/onboarding/risk-profile/complete` from web OR the Telegram bot's
+  /// `/setup` flow). Used by the web SPA to gate the user into the setup
+  /// wizard before allowing access to trade/predict/coach/portfolio pages.
+  /// Null = not completed.
+  risk_profile_completed_at DateTime?
+
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+  deleted_at          DateTime?
+
+  telegram            TelegramUser?
+  recommendations     Recommendation[]
+  trades              Trade[]
+  namespaces          MemoryNamespace[]
+  hedges              HedgePosition[]
+  tearsheets          WeeklyTearsheet[]
+  notifications       Notification[]
+  pending_deposits    PendingDeposit[]
+
+  @@index([sui_address])
+  @@index([profile_object_id])
+}
+
+/// One per Telegram user bound to a Sui address. `telegram_user_id_hash` is a
+/// peppered SHA-256 of the raw `telegram_user_id` (PII defense per §15.2b).
+model TelegramUser {
+  id                    String   @id @default(cuid())
+  telegram_user_id_hash String   @unique
+  /// Raw Telegram chat ID. Required to DM the user (only the BOT side needs
+  /// this; the raw `telegram_user_id` is still NOT persisted). The chat id is
+  /// a public identifier from Telegram's perspective and is not PII once the
+  /// user has voluntarily started the bot.
+  telegram_chat_id      BigInt?
+  /// Optional friendly handle; nullable since users can hide it.
+  telegram_username     String?
+  trader_profile_id     String   @unique
+  trader_profile        TraderProfile @relation(fields: [trader_profile_id], references: [id])
+
+  created_at            DateTime  @default(now())
+  updated_at            DateTime  @updatedAt
+  deleted_at            DateTime?
+
+  @@index([telegram_user_id_hash])
+}
+
+/// Short-lived OAuth state nonce binding telegram_user_id_hash <-> address.
+/// Used by §15.2b to prevent address-binding hijack. TTL ≈ 5 minutes.
+model OAuthNonce {
+  nonce                 String   @id
+  /// telegram_user_id_hash is the per-user identifier for the Telegram surface.
+  /// For web-origin flows we generate a synthetic per-flow hash (web::<nanoid>)
+  /// so the surface stays uniform and the OnboardingService doesn't branch.
+  telegram_user_id_hash String
+  /// Origin surface that initiated the OAuth flow. 'telegram' for bot, 'web'
+  /// for the SPA. Drives the redirect target in /oauth/callback.
+  origin                String   @default("telegram")
+  /// For web-origin flows: target SPA path to redirect to after JWT issuance.
+  /// Defaults to `${WEB_BASE_URL}/oauth-finish`. Stored so we can support
+  /// `?next=...` deep links without trusting the redirect param at callback.
+  web_redirect_uri      String?
+  /// Ephemeral keypair + Enoki state for zkLogin proof construction. Persisted
+  /// here so the OAuth callback can complete `createZkLoginZkp` later. JSON:
+  /// `{ ephemeralSecretHex, ephemeralPublicKeyHex, randomness, maxEpoch, nonce }`.
+  zklogin_state         Json?
+  /// Optional action to perform on OAuth callback. 'onboard' (default/null) or
+  /// 'deposit'. When 'deposit', the callback invokes DepositService instead of
+  /// the standard OnboardingService bootstrap.
+  action                String?
+  /// Action-specific metadata. For 'deposit': { amountMist: string, traderProfileId: string }.
+  action_meta           Json?
+  expires_at            DateTime
+  consumed_at           DateTime?
+  created_at            DateTime @default(now())
+
+  @@index([telegram_user_id_hash])
+  @@index([expires_at])
+  @@index([origin])
+}
+
+/// Short-lived single-use token issued by /oauth/callback for web-origin
+/// flows. The web /oauth-finish page exchanges this for an httpOnly cookie
+/// via POST /auth/web/set-cookie. Decouples the JWT from the URL so it
+/// never sits in browser history or referer headers longer than one
+/// navigation. TTL ≈ 2 minutes.
+model WebAuthHandoff {
+  id            String   @id @default(cuid())
+  /// Random opaque token returned to the web client in the redirect URL.
+  handoff_token String   @unique
+  /// The actual session JWT, set as cookie when consumed.
+  jwt           String   @db.Text
+  /// Bound Sui address (informational; cookie value is the source of truth).
+  sui_address   String
+  expires_at    DateTime
+  consumed_at   DateTime?
+  created_at    DateTime @default(now())
+
+  @@index([expires_at])
+}
+
+// === Coach + Atoma audit trail ===
+
+/// One per Atoma chat.create response. Walrus blob_id is the encrypted audit blob.
+model Recommendation {
+  id                  String   @id @default(cuid())
+  trader_profile_id   String
+  trader_profile      TraderProfile @relation(fields: [trader_profile_id], references: [id])
+
+  /// SHA-256 of the prompt body for reproducibility.
+  atoma_request_hash  String
+  /// Atoma response hash (v2 confidential endpoint only; null for v1 standard).
+  atoma_response_hash String?
+  /// Atoma node ed25519 signature (v2 confidential only).
+  node_signature      String?
+  /// Parsed decision JSON (Guardian-validated, Zod-typed).
+  response_json       Json
+  /// Walrus blob ID of the encrypted recommendation blob.
+  walrus_blob_id      String?
+
+  model               String
+  /// 'standard' | 'confidential'
+  endpoint            String
+  /// Guardian summary (plain language, shown to user).
+  guardian_summary    String?
+  /// Did the Guardian pass all checks?
+  guardian_pass       Boolean   @default(false)
+
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+  deleted_at          DateTime?
+
+  trades              Trade[]
+
+  @@index([trader_profile_id, created_at])
+  @@index([atoma_request_hash])
+}
+
+// === DeepBook trades ===
+
+/// One per `executor::place_limit_under_budget` PTB. Links optionally to the
+/// originating Recommendation.
+model Trade {
+  id                String   @id @default(cuid())
+  trader_profile_id String
+  trader_profile    TraderProfile @relation(fields: [trader_profile_id], references: [id])
+
+  recommendation_id String?
+  recommendation    Recommendation? @relation(fields: [recommendation_id], references: [id])
+
+  pool_id           String
+  /// DeepBook `OrderInfo.order_id` (u128 → stringified Decimal).
+  order_id          String?  @unique
+  /// Client-supplied client_order_id (u64 → BigInt).
+  client_order_id   BigInt
+  /// 'bid' | 'ask'
+  side              String
+  /// DeepBook FLOAT_SCALING'd price.
+  price             BigInt
+  /// Base raw units.
+  quantity          BigInt
+  /// FLOAT_SCALING'd quote notional (matches Move-side budget unit).
+  notional          BigInt
+  /// 'placed' | 'partial' | 'filled' | 'canceled' | 'expired' | 'failed'
+  status            String   @default("placed")
+  /// Filled quantity so far (base raw units).
+  filled_quantity   BigInt   @default(0)
+
+  /// Walrus blob ID of the encrypted settlement blob.
+  walrus_blob_id    String?
+  /// Sui transaction digest (base58).
+  tx_digest         String?
+
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+  deleted_at        DateTime?
+  settled_at        DateTime?
+
+  @@index([trader_profile_id, status, created_at])
+  @@index([pool_id, created_at])
+  @@index([tx_digest])
+}
+
+// === DeepBook Predict hedges (v2 stretch; persisted for v1 visibility too) ===
+
+model HedgePosition {
+  id                String   @id @default(cuid())
+  trader_profile_id String
+  trader_profile    TraderProfile @relation(fields: [trader_profile_id], references: [id])
+
+  oracle_id         String
+  predict_id        String?
+  strike            BigInt
+  is_up             Boolean
+  /// dUSDC quantity (base raw units).
+  quantity          BigInt
+  cost              BigInt
+  /// 'open' | 'settled' | 'redeemed'
+  status            String   @default("open")
+  payout            BigInt?
+
+  tx_digest         String?
+  settled_at        DateTime?
+  /// Market expiry in Unix milliseconds (stored at mint time so the settlement
+  /// worker can reconstruct the MarketKey without fetching the oracle object).
+  expiry_ms         BigInt?
+
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+  deleted_at        DateTime?
+
+  @@index([trader_profile_id, status])
+  @@index([oracle_id])
+}
+
+// === Walrus blob registry ===
+
+/// Convenience cache. Authoritative source is on-chain `audit_anchor::AnchorRecorded` events.
+model WalrusBlob {
+  blob_id       String   @id
+  /// Slice tag (e.g. "pnl:tearsheet", "trades", "risk-profile").
+  slice         String?
+  /// `kind` from `audit_anchor` (0=recommendation, 1=trade, 2=weekly-report).
+  kind          Int?
+  encrypted     Boolean  @default(true)
+  size_bytes   Int      @default(0)
+  epochs        Int
+
+  /// Optional reverse refs for indexer convenience.
+  owner_address String?
+  tx_digest     String?
+
+  registered_at DateTime  @default(now())
+  deleted_at    DateTime?
+
+  @@index([owner_address, slice])
+  @@index([kind, registered_at])
+}
+
+// === MemWal namespaces ===
+
+/// One row per (trader_profile, namespace). Tracks last recall time so we can
+/// trim cold-start `restore()` calls per LIGHTHOUSE.md §7.4.
+model MemoryNamespace {
+  id                String   @id @default(cuid())
+  trader_profile_id String
+  trader_profile    TraderProfile @relation(fields: [trader_profile_id], references: [id])
+  namespace         String
+  last_recall_at    DateTime?
+  last_remember_at  DateTime?
+
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  @@unique([trader_profile_id, namespace])
+}
+
+// === Event indexer cursor ===
+
+/// Stores per-event-type pagination cursor so the indexer can resume after restart.
+model EventCursor {
+  /// Stable key like 'deepbook:order_info::OrderFilled' or 'lighthouse:executor::TradeExecuted'.
+  id          String   @id
+  /// `EventId` JSON shape: { txDigest, eventSeq }.
+  cursor_json Json
+  /// Last successfully processed event timestamp.
+  updated_at  DateTime @updatedAt
+  created_at  DateTime @default(now())
+}
+
+/// Dead-letter queue for events whose handlers threw. The indexer advances past
+/// failed events (so cursor isn't blocked) and writes a row here for later
+/// reprocessing. Drained by a separate worker or manual replay.
+model FailedEvent {
+  id          String   @id @default(cuid())
+  event_key   String   /// matches EventCursor.id
+  tx_digest   String
+  event_seq   String
+  /// Full event JSON for replay.
+  event_json  Json
+  /// Last error message + stack.
+  error_msg   String   @db.Text
+  /// Retry counter.
+  attempts    Int      @default(1)
+  /// Set when successfully replayed (soft-delete pattern).
+  resolved_at DateTime?
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@index([event_key, resolved_at])
+  @@index([tx_digest])
+}
+
+// === Weekly Quilt tearsheet (UC6 — Walrus artifact-driven workflow) ===
+
+/// One row per generated weekly Quilt. Records the Walrus quilt blob id,
+/// the per-file patch identifiers we wrote, and the on-chain audit anchor
+/// digest. Drives the public tearsheet URL `lighthouse.wal.app/u/<suins>/<week>`.
+model WeeklyTearsheet {
+  id                   String   @id @default(cuid())
+  trader_profile_id    String
+  trader_profile       TraderProfile @relation(fields: [trader_profile_id], references: [id])
+
+  /// ISO 8601 week id, e.g. `2026-W22`.
+  week                 String
+  /// Walrus Quilt blob id (base64url).
+  quilt_blob_id        String
+  /// Identifiers for the 3 files in the quilt (per §9.3):
+  ///   `<week>-summary.json.seal`  — encrypted summary
+  ///   `<week>-detail.json.seal`   — encrypted detail
+  ///   `<week>-tearsheet.json`     — plaintext public tearsheet
+  summary_identifier   String
+  detail_identifier    String
+  tearsheet_identifier String
+
+  /// On-chain audit anchor digest.
+  audit_anchor_tx      String?
+
+  /// Window the tearsheet aggregated.
+  window_from          DateTime
+  window_to            DateTime
+
+  /// Aggregate metrics persisted for fast retrieval (mirrored in the
+  /// plaintext tearsheet payload).
+  total_trades         Int      @default(0)
+  total_pnl            BigInt   @default(0)
+  win_rate_bps         Int      @default(0)
+
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+  deleted_at           DateTime?
+
+  @@unique([trader_profile_id, week])
+  @@index([trader_profile_id, created_at])
+}
+
+// === Generic error log (kept from starter) ===
+
+// === Web notifications (LIGHTHOUSE.md §13.3) ===
+//
+// Mirror of the Telegram/Messaging fanout in NotificationDispatcher so the web
+// SPA can render the same event stream. Written BEFORE the DM/group fanout so
+// the row exists even if downstream sends fail. Soft state — Telegram + the
+// Sui Stack Messaging group remain the authoritative delivery channels.
+model Notification {
+  id                String   @id @default(cuid())
+  trader_profile_id String
+  trader_profile    TraderProfile @relation(fields: [trader_profile_id], references: [id])
+
+  /// Matches NotificationCategory in src/services/NotificationDispatcher.ts.
+  /// Values: trade_settled | hedge_opened | hedge_settled | budget_warning |
+  ///         agent_expired | agent_revoked | weekly_report_ready | deposit_swept
+  kind              String
+  title             String
+  body              String   @db.Text
+  /// Free-form structured context (digest, amounts, oracle id, etc.). Optional.
+  payload           Json?
+  read_at           DateTime?
+  created_at        DateTime @default(now())
+
+  @@index([trader_profile_id, created_at])
+  @@index([trader_profile_id, read_at])
+}
+
+// === Auto-deposit sweeper intent (web flow) ===
+//
+// Per-user intent row written when the web client clicks "Deposit". The web
+// shows the user the public executor address; user sends SUI; the sweeper
+// worker (src/workers/autoDepositSweeper.ts) detects the new SUI balance,
+// claims this row for the user, and runs `deposit_with_cap` server-side.
+//
+// Hackathon-grade race-prone design: relies on a Postgres advisory lock keyed
+// on the executor address to serialize claims across worker ticks. Not safe
+// against multi-instance backends without lock coordination.
+model PendingDeposit {
+  id                String   @id @default(cuid())
+  trader_profile_id String
+  trader_profile    TraderProfile @relation(fields: [trader_profile_id], references: [id])
+
+  /// Amount the user intends to send, in MIST (1 SUI = 10^9 MIST).
+  amount_mist       BigInt
+  /// 'awaiting' | 'swept' | 'failed' | 'expired'
+  status            String   @default("awaiting")
+  /// Hard deadline for the user to send SUI. After this we mark expired.
+  expected_by       DateTime
+  /// Sui address we EXPECT the SUI deposit to originate from. The sweeper
+  /// only matches an incoming transfer to this intent if the on-chain sender
+  /// equals this address — closes the cross-user FIFO-credit attack (C2).
+  /// Populated from `request.user.sui_address` at /agent/pending-deposit time.
+  /// Nullable for backwards compatibility with rows written before this
+  /// column existed; rows with NULL are NEVER matched by the new sweeper
+  /// (legacy rows must be re-created post-migration to be sweepable).
+  expected_sender_address String?
+  /// Digest of the inbound SUI transfer the sweeper consumed to fulfil this
+  /// intent. Set BEFORE swept_tx_digest so we can never double-claim the
+  /// same on-chain incoming tx for two intents. Nullable on legacy rows.
+  claimed_from_tx_digest  String?
+  /// Digest of the `deposit_with_cap` tx the sweeper executed (when swept).
+  swept_tx_digest   String?
+  /// Last failure reason (when status='failed').
+  last_error        String?  @db.Text
+
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  @@index([trader_profile_id, status])
+  @@index([status, expected_by])
+  @@index([expected_sender_address, status])
+  /// Enforces "each incoming tx is consumed at most once across the whole
+  /// PendingDeposit table" — guarantees no double-claim even under sweeper
+  /// retries or concurrent ticks. NULLs are not constrained in Postgres.
+  @@unique([claimed_from_tx_digest])
+}
+
+model ErrorLog {
+  id         String   @id @default(cuid())
+  errorCode  String
+  message    String
+  statusCode Int
+  stack      String?  @db.Text
+  context    String?  @db.Text
+  userId     String?
+  method     String?
+  path       String?
+  userAgent  String?  @db.Text
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([errorCode])
+  @@index([createdAt])
+}
