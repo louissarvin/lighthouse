@@ -46,7 +46,8 @@ import type {
 } from 'fastify';
 
 import { prismaQuery } from '../lib/prisma.ts';
-import { handleServerError } from '../utils/errorHandler.ts';
+import { authMiddleware } from '../middlewares/authMiddleware.ts';
+import { handleError, handleServerError } from '../utils/errorHandler.ts';
 
 // === Constants ===
 
@@ -55,6 +56,10 @@ import { handleServerError } from '../utils/errorHandler.ts';
 const MAX_LIMIT = 20;
 const DEFAULT_LIMIT = 5;
 const SUMMARY_MAX_CHARS = 120;
+/// `/activity/me` cap is more permissive because it is auth-scoped and the
+/// owner can reasonably want a longer history of their own anchors.
+const ME_MAX_LIMIT = 50;
+const ME_DEFAULT_LIMIT = 20;
 
 // === Types ===
 
@@ -115,13 +120,19 @@ function clamp(s: string): string {
 
 // === Loaders (each returns at most `limit` rows for one kind) ===
 
-async function loadTraderProfileCreated(limit: number): Promise<ActivityEvent[]> {
+async function loadTraderProfileCreated(
+  limit: number,
+  ownerAddress?: string,
+): Promise<ActivityEvent[]> {
   // LIGHTHOUSE.md §6.2: trader_profile::create is the on-chain mint. The Sui
   // address column is whitelisted; we never select the optional `suins_name`
   // here because the SuiNS apex is user-controlled UTF-8 and would defeat
   // the address-truncation defense in summary strings.
   const rows = await prismaQuery.traderProfile.findMany({
-    where: { deleted_at: null },
+    where: {
+      deleted_at: null,
+      ...(ownerAddress ? { sui_address: ownerAddress } : {}),
+    },
     orderBy: { created_at: 'desc' },
     take: limit,
     select: {
@@ -143,14 +154,22 @@ async function loadTraderProfileCreated(limit: number): Promise<ActivityEvent[]>
   }));
 }
 
-async function loadMemWalWrites(limit: number): Promise<ActivityEvent[]> {
+async function loadMemWalWrites(
+  limit: number,
+  ownerAddress?: string,
+): Promise<ActivityEvent[]> {
   // LIGHTHOUSE.md §7.1: MemWal writes happen across the seven canonical
   // namespaces. We approximate per-write events via `MemoryNamespace`
   // `last_remember_at` (one row per (profile, namespace)). Strict MemWal
   // append events live on the relayer, not on Sui, so this is the best
   // server-side proxy until a dedicated MemWal write log lands.
   const rows = await prismaQuery.memoryNamespace.findMany({
-    where: { last_remember_at: { not: null } },
+    where: {
+      last_remember_at: { not: null },
+      ...(ownerAddress
+        ? { trader_profile: { sui_address: ownerAddress } }
+        : {}),
+    },
     orderBy: { last_remember_at: 'desc' },
     take: limit,
     select: {
@@ -172,12 +191,19 @@ async function loadMemWalWrites(limit: number): Promise<ActivityEvent[]> {
     }));
 }
 
-async function loadAnchorRecorded(limit: number): Promise<ActivityEvent[]> {
+async function loadAnchorRecorded(
+  limit: number,
+  ownerAddress?: string,
+): Promise<ActivityEvent[]> {
   // LIGHTHOUSE.md §6.4: `audit_anchor::AnchorRecorded` is the Move event
   // populated by EventIndexer.handleAnchorRecorded. The WalrusBlob row is
   // the indexer's authoritative cache (per schema.prisma comment).
   const rows = await prismaQuery.walrusBlob.findMany({
-    where: { deleted_at: null, tx_digest: { not: null } },
+    where: {
+      deleted_at: null,
+      tx_digest: { not: null },
+      ...(ownerAddress ? { owner_address: ownerAddress } : {}),
+    },
     orderBy: { registered_at: 'desc' },
     take: limit,
     select: {
@@ -241,13 +267,22 @@ async function loadAnchorRecorded(limit: number): Promise<ActivityEvent[]> {
   });
 }
 
-async function loadTradePlaced(limit: number): Promise<ActivityEvent[]> {
+async function loadTradePlaced(
+  limit: number,
+  ownerAddress?: string,
+): Promise<ActivityEvent[]> {
   // LIGHTHOUSE.md §10: DeepBook v3 limit orders routed via the executor wrapper
   // (`executor::place_limit_under_budget`). The Trade row is created in
   // /sponsor/place-limit and the EventIndexer's handleTradeExecuted promotes
   // it to status='placed' with the on-chain order_id.
   const rows = await prismaQuery.trade.findMany({
-    where: { deleted_at: null, tx_digest: { not: null } },
+    where: {
+      deleted_at: null,
+      tx_digest: { not: null },
+      ...(ownerAddress
+        ? { trader_profile: { sui_address: ownerAddress } }
+        : {}),
+    },
     orderBy: { created_at: 'desc' },
     take: limit,
     select: {
@@ -354,6 +389,90 @@ export const activityRoutes: FastifyPluginCallback = (
         // the EventIndexer persisted via handleAnchorRecorded).
         const total_indexed = await prismaQuery.walrusBlob.count({
           where: { deleted_at: null },
+        });
+
+        return reply.code(200).send({
+          success: true,
+          error: null,
+          data: {
+            events: merged,
+            total_indexed,
+          },
+        });
+      } catch (e) {
+        return handleServerError(reply, e as Error);
+      }
+    },
+  );
+
+  // ─── GET /activity/me ──────────────────────────────────────────────────
+  //
+  // User-scoped mirror of /activity/recent. Filters every loader by the
+  // authed user's sui_address so a wallet sees only its own on-chain
+  // events. Same response shape and ordering as /recent; loaders are
+  // parameterised on `ownerAddress` so the merge/sort/total path is
+  // shared (DRY).
+  //
+  // Security:
+  //   - Auth required (JWT cookie OR Authorization: Bearer)
+  //   - Higher per-user limit ceiling (50) because the user is reading
+  //     their own data; still bounded.
+  //   - Per-IP rate limit kept the same as /recent so a bot sharing one
+  //     IP can't burn through quota across many accounts.
+  //   - `total_indexed` is OWNER-SCOPED for this route (not the global
+  //     count) — the public surface returns the global counter, but on a
+  //     user-scoped view it would be misleading to surface global state.
+  app.get(
+    '/me',
+    {
+      preHandler: [authMiddleware],
+      schema: {
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            limit: {
+              type: 'integer',
+              minimum: 1,
+              maximum: ME_MAX_LIMIT,
+              default: ME_DEFAULT_LIMIT,
+            },
+          },
+        },
+      },
+      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const user = request.user;
+      if (!user?.sui_address) {
+        return handleError(reply, 401, 'no sui_address on session', 'NO_SUI_ADDRESS');
+      }
+      const { limit } = request.query as { limit: number };
+      const ownerAddress = user.sui_address;
+
+      try {
+        const [profiles, memwals, anchors, trades, grants] = await Promise.all([
+          loadTraderProfileCreated(limit, ownerAddress),
+          loadMemWalWrites(limit, ownerAddress),
+          loadAnchorRecorded(limit, ownerAddress),
+          loadTradePlaced(limit, ownerAddress),
+          loadGrantCreated(limit),
+        ]);
+
+        const merged: ActivityEvent[] = [
+          ...profiles,
+          ...memwals,
+          ...anchors,
+          ...trades,
+          ...grants,
+        ]
+          .sort((a, b) => b.timestamp_ms - a.timestamp_ms)
+          .slice(0, limit);
+
+        // Owner-scoped total. Mirrors /recent's `total_indexed` semantics
+        // (AnchorRecorded count) but filtered to this user's blobs.
+        const total_indexed = await prismaQuery.walrusBlob.count({
+          where: { deleted_at: null, owner_address: ownerAddress },
         });
 
         return reply.code(200).send({
