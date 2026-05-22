@@ -54,6 +54,32 @@ export interface MessagingClient {
     groupUuid: string;
     signal: AbortSignal;
   }): AsyncIterable<MessagingMessage>;
+  /**
+   * One-shot fetch of historical messages for a group. Newest-first when
+   * `limit` is set; the upstream SDK paginates by `beforeOrder` / `afterOrder`
+   * but for our HTTP read surface we just pull the most recent `limit`.
+   */
+  getMessages(args: {
+    signer: Ed25519Keypair;
+    groupUuid: string;
+    limit?: number;
+  }): Promise<{ messages: MessagingDecryptedMessage[]; hasNext: boolean }>;
+}
+
+/// Mirrors `DecryptedMessage` from `@mysten/sui-stack-messaging`. We keep a
+/// local copy so the rest of the backend does not have to import the SDK type
+/// transitively just to type the read response.
+export interface MessagingDecryptedMessage {
+  messageId: string;
+  groupId: string;
+  order: number;
+  text: string;
+  senderAddress: string;
+  createdAt: number;
+  updatedAt: number;
+  isEdited: boolean;
+  isDeleted: boolean;
+  senderVerified: boolean;
 }
 
 export interface MessagingMessage {
@@ -138,6 +164,32 @@ export function getMessaging(signer: Ed25519Keypair): MessagingClient {
           Number((m as { timestampMs?: number | string }).timestampMs ?? Date.now()) || Date.now(),
       }));
     },
+    async getMessages(args) {
+      // Upstream SDK exposes `client.messaging.getMessages({ signer, groupRef,
+      // afterOrder?, beforeOrder?, limit? })` returning
+      // `{ messages: DecryptedMessage[]; hasNext: boolean }` per
+      // node_modules/@mysten/sui-stack-messaging/dist/messaging-types.d.mts.
+      // The SDK paginates by `order` (monotonic, set by the on-chain channel
+      // contract) — passing no cursor + a limit returns the most recent N.
+      const res = await inner.messaging.getMessages({
+        signer: args.signer,
+        groupRef: { uuid: args.groupUuid },
+        limit: args.limit,
+      });
+      const mapped: MessagingDecryptedMessage[] = (res.messages ?? []).map((m) => ({
+        messageId: m.messageId,
+        groupId: m.groupId,
+        order: m.order,
+        text: m.text,
+        senderAddress: m.senderAddress,
+        createdAt: Number(m.createdAt) || 0,
+        updatedAt: Number(m.updatedAt) || 0,
+        isEdited: !!m.isEdited,
+        isDeleted: !!m.isDeleted,
+        senderVerified: !!m.senderVerified,
+      }));
+      return { messages: mapped, hasNext: !!res.hasNext };
+    },
   };
   return _cache;
 }
@@ -164,6 +216,7 @@ function makeDisabledStub(): MessagingClient {
         throw new Error('[messaging] disabled: set RELAYER_URL to enable');
       })();
     },
+    getMessages: reject as MessagingClient['getMessages'],
   };
 }
 
@@ -246,5 +299,32 @@ export async function sendMessageAsCoach(args: {
     signer: coach,
     groupUuid: args.groupUuid,
     text: args.text,
+  });
+}
+
+/**
+ * Read historical messages from a group using the Coach as the read-side
+ * SessionKey signer. The Coach is a member of every group it creates, so it
+ * has SEAL decrypt rights on the channel's stream. The HTTP read endpoint
+ * (`GET /messaging/list/:groupUuid`) calls this after enforcing membership
+ * via TraderProfile.{coach_group_uuid, audit_group_uuid}.
+ *
+ * Throws when RELAYER_URL is empty or when the upstream SDK read fails. The
+ * caller is responsible for turning those into the `{ unavailable: true }`
+ * graceful-degradation response.
+ */
+export async function listMessagesAsCoach(
+  groupUuid: string,
+  limit = 50,
+): Promise<{ messages: MessagingDecryptedMessage[]; hasNext: boolean }> {
+  const coach = getCoachKeypair();
+  const messaging = getMessaging(coach);
+  if (!messaging.enabled) {
+    throw new Error('[messaging] disabled: set RELAYER_URL to enable');
+  }
+  return await messaging.getMessages({
+    signer: coach,
+    groupUuid,
+    limit,
   });
 }

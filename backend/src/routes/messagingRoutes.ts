@@ -21,12 +21,15 @@ import type {
 
 import { authMiddleware } from '../middlewares/authMiddleware.ts';
 import { RELAYER_URL } from '../config/main-config.ts';
+import { prismaQuery } from '../lib/prisma.ts';
 import {
   createGroupAsCoach,
+  listMessagesAsCoach,
   sendMessageAsCoach,
 } from '../lib/messaging.ts';
 import {
   handleError,
+  handleForbiddenError,
   handleServerError,
   handleValidationError,
 } from '../utils/errorHandler.ts';
@@ -167,6 +170,106 @@ export const messagingRoutes: FastifyPluginCallback = (
         });
       } catch (e) {
         return handleServerError(reply, e as Error);
+      }
+    },
+  );
+
+  // ─── GET /messaging/list/:groupUuid ────────────────────────────────────
+  //
+  // Read the most recent (up to 50) messages from a Sui Stack Messaging
+  // group. Membership is enforced against the authed user's TraderProfile —
+  // a user can only read a group whose UUID is stored as their own
+  // `coach_group_uuid` or `audit_group_uuid`. We DO NOT trust the SDK's
+  // implicit "decrypt only what you can read" because the SDK call still
+  // consumes the Coach's relayer budget; gating up-front prevents a
+  // malicious caller from probing arbitrary group UUIDs.
+  //
+  // Graceful degradation: if RELAYER_URL is empty or the SDK read throws,
+  // return `{ messages: [], unavailable: true, reason }` with a 200 so the
+  // frontend can render an "offline" panel instead of an error toast. This
+  // matches `/messaging/health`'s contract.
+  app.get(
+    '/list/:groupUuid',
+    {
+      preHandler: [authMiddleware],
+      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const user = request.user;
+      if (!user?.trader_profile_id) {
+        return handleError(reply, 401, 'no trader_profile bound', 'NO_PROFILE');
+      }
+      const { groupUuid } = request.params as { groupUuid?: string };
+      if (!groupUuid || !/^[a-f0-9-]{16,64}$/i.test(groupUuid)) {
+        return handleError(reply, 400, 'invalid groupUuid', 'BAD_GROUP_UUID');
+      }
+
+      // Membership check: only the authed user's own coach OR audit group.
+      const profile = await prismaQuery.traderProfile.findUnique({
+        where: { id: user.trader_profile_id },
+        select: { coach_group_uuid: true, audit_group_uuid: true },
+      });
+      if (!profile) {
+        return handleError(reply, 401, 'profile not found', 'NO_PROFILE');
+      }
+      const isCoachGroup = profile.coach_group_uuid === groupUuid;
+      const isAuditGroup = profile.audit_group_uuid === groupUuid;
+      if (!isCoachGroup && !isAuditGroup) {
+        return handleForbiddenError(reply, 'not a member of this group');
+      }
+
+      // Short-circuit when the relayer is not configured — the SDK would
+      // throw further down anyway, and we want a stable graceful response.
+      if (!RELAYER_URL) {
+        return reply.code(200).send({
+          success: true,
+          error: null,
+          data: {
+            messages: [],
+            unavailable: true,
+            reason: 'relayer not configured',
+          },
+        });
+      }
+
+      try {
+        const { messages } = await listMessagesAsCoach(groupUuid, 50);
+        // Newest-first; the SDK orders by `order` ascending. Map to the
+        // public response shape and sort descending by createdAt.
+        const out = messages
+          .map((m) => ({
+            id: m.messageId,
+            sender: m.senderAddress,
+            text: m.text,
+            timestampMs: m.createdAt,
+            // The SDK returns plaintext after SEAL decryption; we expose
+            // a boolean so the client can distinguish a redacted (deleted
+            // or undecryptable) message from a real empty body.
+            decrypted: !m.isDeleted && m.text.length > 0,
+          }))
+          .sort((a, b) => b.timestampMs - a.timestampMs)
+          .slice(0, 50);
+
+        return reply.code(200).send({
+          success: true,
+          error: null,
+          data: { messages: out },
+        });
+      } catch (e) {
+        // Graceful degradation per the brief: relayer down, SDK timeout,
+        // SEAL key-server quorum failure, etc. Log full error server-side
+        // (handleError pattern) but never 500 the caller.
+        const msg = (e as Error)?.message ?? String(e);
+        console.warn(`[messaging] list/${groupUuid} read failed:`, msg);
+        return reply.code(200).send({
+          success: true,
+          error: null,
+          data: {
+            messages: [],
+            unavailable: true,
+            reason: msg.slice(0, 200),
+          },
+        });
       }
     },
   );
