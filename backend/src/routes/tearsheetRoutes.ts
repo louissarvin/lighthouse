@@ -24,6 +24,8 @@ import { WALRUS_AGGREGATOR_URL } from '../config/main-config.ts';
 import { prismaQuery } from '../lib/prisma.ts';
 import { resolveSuiNS } from '../lib/suins.ts';
 import { readQuiltFile } from '../lib/walrus.ts';
+import { authMiddleware } from '../middlewares/authMiddleware.ts';
+import { buildWeeklyTearsheet, isoWeek } from '../services/WeeklyTearsheet.ts';
 import {
   handleError,
   handleNotFoundError,
@@ -141,8 +143,227 @@ export const tearsheetRoutes: FastifyPluginCallback = (
     }
   });
 
+  // ─── POST /tearsheet/build-now ─────────────────────────────────────────
+  //
+  // Manually trigger a weekly tearsheet generation for the authed user.
+  // Reuses `buildWeeklyTearsheet(profileId, windowEnd)` from
+  // `services/WeeklyTearsheet.ts` so the SEAL+Walrus+anchor pipeline is a
+  // single source of truth shared with the Sunday cron worker (DRY).
+  //
+  // Idempotent: when a WeeklyTearsheet row already exists for
+  // (trader_profile_id, week) we return the persisted row with
+  // `alreadyGenerated: true` instead of re-running the full pipeline. The
+  // worker's `upsert` would otherwise blow ~$0.01 of WAL on a duplicate
+  // quilt write on every click.
+  //
+  // Security:
+  //   - JWT cookie OR Authorization: Bearer required (authMiddleware).
+  //   - Rate-limited 1 / 60s per user. Anchored to the JWT-derived
+  //     trader_profile_id so a user can't bypass by hopping IPs (key
+  //     fallback to IP for unauthenticated probes that race past the
+  //     middleware, which should never happen in practice).
+  //   - Returns 502 if Walrus aggregator/publisher is unreachable, 504 if
+  //     the on-chain anchor times out. Other unknown errors → 500 via
+  //     handleServerError (generic message, server-side log).
+  //
+  // Response: {
+  //   alreadyGenerated, week, walrusBlobId, publicTearsheetUrl,
+  //   auditAnchorTxDigest, totalTrades, windowFrom?, windowTo?
+  // }
+  app.post(
+    '/build-now',
+    {
+      preHandler: [authMiddleware],
+      // Fastify rate-limit honors per-route `keyGenerator` so we can scope
+      // by trader_profile_id rather than IP. 1 request per 60s per user.
+      config: {
+        rateLimit: {
+          max: 1,
+          timeWindow: '60 seconds',
+          keyGenerator: (req) => {
+            const u = (req as FastifyRequest).user;
+            return u?.trader_profile_id ?? req.ip;
+          },
+        },
+      },
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            week: { type: 'string', pattern: '^[0-9]{4}-W[0-9]{2}$' },
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const user = request.user;
+      if (!user?.trader_profile_id) {
+        return handleError(reply, 401, 'no trader_profile bound', 'NO_PROFILE');
+      }
+      const body = (request.body ?? {}) as { week?: string };
+      const week = body.week ?? isoWeek(new Date());
+
+      // Resolve windowEnd to a Date that, when passed through `isoWeek`,
+      // produces the requested label. For the default (current week) we use
+      // `now` directly. For an explicit historical week we parse the
+      // YYYY-Www label back to the Thursday of that ISO week (canonical
+      // anchor day per ISO 8601). The weekly pipeline uses a 7-day rolling
+      // window ending at windowEnd, so anchoring at the Sunday following
+      // the ISO Thursday gives us a stable, well-defined window for any
+      // historical replay.
+      let windowEnd: Date;
+      if (body.week) {
+        const parsed = parseIsoWeekToWindowEnd(week);
+        if (!parsed) {
+          return handleError(reply, 400, 'invalid week label', 'BAD_WEEK');
+        }
+        windowEnd = parsed;
+      } else {
+        windowEnd = new Date();
+      }
+
+      try {
+        // Idempotency: check for an existing row BEFORE running the pipeline.
+        // Avoids burning Walrus storage + on-chain gas on a duplicate click.
+        const existing = await prismaQuery.weeklyTearsheet.findUnique({
+          where: {
+            trader_profile_id_week: {
+              trader_profile_id: user.trader_profile_id,
+              week,
+            },
+          },
+        });
+        if (existing) {
+          const publicTearsheetUrl = `${WALRUS_AGGREGATOR_URL}/v1/blobs/by-quilt-id/${existing.quilt_blob_id}/${existing.tearsheet_identifier}`;
+          return reply.code(200).send({
+            success: true,
+            error: null,
+            data: {
+              alreadyGenerated: true,
+              week: existing.week,
+              walrusBlobId: existing.quilt_blob_id,
+              publicTearsheetUrl,
+              auditAnchorTxDigest: existing.audit_anchor_tx,
+              totalTrades: existing.total_trades,
+              windowFrom: existing.window_from.toISOString(),
+              windowTo: existing.window_to.toISOString(),
+            },
+          });
+        }
+
+        const result = await buildWeeklyTearsheet(
+          user.trader_profile_id,
+          windowEnd,
+        );
+        if (!result) {
+          return handleError(
+            reply,
+            404,
+            'profile missing on-chain TraderProfile object',
+            'PROFILE_NOT_ONCHAIN',
+          );
+        }
+
+        // Resolve window_from/window_to from the persisted row so the
+        // response is authoritative even when the upstream pipeline mutates
+        // the window (e.g. for short-history replay).
+        const row = await prismaQuery.weeklyTearsheet.findUnique({
+          where: {
+            trader_profile_id_week: {
+              trader_profile_id: user.trader_profile_id,
+              week: result.week,
+            },
+          },
+          select: { window_from: true, window_to: true },
+        });
+
+        return reply.code(200).send({
+          success: true,
+          error: null,
+          data: {
+            alreadyGenerated: false,
+            week: result.week,
+            walrusBlobId: result.quiltId,
+            publicTearsheetUrl: result.publicTearsheetUrl,
+            auditAnchorTxDigest: result.auditAnchorTxDigest,
+            totalTrades: result.totalTrades,
+            windowFrom: row?.window_from.toISOString() ?? null,
+            windowTo: row?.window_to.toISOString() ?? null,
+          },
+        });
+      } catch (e) {
+        // Classify upstream failures so the frontend can render a useful
+        // retry CTA. Walrus failures most often surface as fetch errors
+        // from the publisher; on-chain anchor failures surface as RPC
+        // timeouts. Anything else is a server bug → 500.
+        const msg = (e as Error)?.message?.toLowerCase() ?? '';
+        if (
+          msg.includes('walrus') ||
+          msg.includes('publisher') ||
+          msg.includes('aggregator') ||
+          msg.includes('econnrefused') ||
+          msg.includes('enotfound')
+        ) {
+          return handleError(
+            reply,
+            502,
+            'walrus unreachable',
+            'WALRUS_UNREACHABLE',
+            e as Error,
+          );
+        }
+        if (
+          msg.includes('timeout') ||
+          msg.includes('timed out') ||
+          msg.includes('deadline')
+        ) {
+          return handleError(
+            reply,
+            504,
+            'anchor tx timed out',
+            'ANCHOR_TX_TIMEOUT',
+            e as Error,
+          );
+        }
+        return handleServerError(reply, e as Error);
+      }
+    },
+  );
+
   done();
 };
+
+/**
+ * Parse an ISO 8601 week label (`YYYY-Www`) into a Date that, when fed
+ * through `isoWeek(date)`, round-trips back to the same label. We anchor on
+ * the Thursday of that ISO week (the canonical anchor day per the ISO 8601
+ * spec) and clamp time to 23:59:59 UTC so the rolling 7-day window inside
+ * `buildWeeklyTearsheet` covers the full Monday-Sunday range.
+ *
+ * Returns `null` for malformed labels. The route's Fastify schema already
+ * pattern-validates the label so this is a defense-in-depth check.
+ */
+function parseIsoWeekToWindowEnd(label: string): Date | null {
+  const m = /^(\d{4})-W(\d{2})$/.exec(label);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const week = Number(m[2]);
+  if (!Number.isFinite(year) || !Number.isFinite(week)) return null;
+  if (week < 1 || week > 53) return null;
+  // ISO 8601: week 1 is the week containing Jan 4th. The Thursday of week N
+  // is `(Thursday of week 1) + (N-1) weeks`.
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  const jan4Dow = (jan4.getUTCDay() + 6) % 7; // Mon=0..Sun=6
+  const thursdayOfWeek1 = new Date(jan4);
+  thursdayOfWeek1.setUTCDate(jan4.getUTCDate() - jan4Dow + 3);
+  const target = new Date(thursdayOfWeek1);
+  target.setUTCDate(thursdayOfWeek1.getUTCDate() + (week - 1) * 7);
+  // Clamp to end-of-day so the 7-day window inside buildWeeklyTearsheet
+  // captures any trades stamped late in the day.
+  target.setUTCHours(23, 59, 59, 999);
+  return target;
+}
 
 // PnL math deferred: notional-as-PnL proxy was misleading. Honest settled-fill
 // math requires DeepBook fill-event integration which lands post-mainnet.
