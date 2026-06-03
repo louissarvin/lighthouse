@@ -22,11 +22,14 @@ import { APP_PORT, IS_DEV, JWT_SECRET, WEB_BASE_URL } from './src/config/main-co
 // Routes
 import { activityRoutes } from './src/routes/activityRoutes.ts';
 import { agentRoutes } from './src/routes/agentRoutes.ts';
+import { auditRoutes } from './src/routes/auditRoutes.ts';
 import { authTelegramRoutes } from './src/routes/authTelegramRoutes.ts';
 import { authWebRoutes } from './src/routes/authWebRoutes.ts';
 import { coachRoutes } from './src/routes/coachRoutes.ts';
 import { deepbookReadRoutes } from './src/routes/deepbookReadRoutes.ts';
 import { dryRunRoutes } from './src/routes/dryRunRoutes.ts';
+import { followRoutes } from './src/routes/followRoutes.ts';
+import { leaderboardRoutes } from './src/routes/leaderboardRoutes.ts';
 import { memwalRoutes } from './src/routes/memwalRoutes.ts';
 import { messagingRoutes } from './src/routes/messagingRoutes.ts';
 import { multiAgentRoutes } from './src/routes/multiAgentRoutes.ts';
@@ -171,8 +174,16 @@ fastify.register(deepbookReadRoutes, { prefix: '/deepbook' });
 // Per-route rate limits live inside each plugin's route options.
 fastify.register(activityRoutes, { prefix: '/activity' });
 fastify.register(statsRoutes, { prefix: '/api' });
+// Also expose stats plugin at the root so the web's WorkerPill (which polls
+// `/stats/workers` directly per AppNav.tsx) lands on the same handler. We
+// register twice rather than moving the prefix to keep the existing
+// `/api/stats` URL stable for the StatsStrip and any external integrations.
+fastify.register(statsRoutes);
 fastify.register(tradeRoutes, { prefix: '/trade' });
 fastify.register(notificationRoutes, { prefix: '/notifications' });
+fastify.register(auditRoutes, { prefix: '/audit' });
+fastify.register(followRoutes, { prefix: '/follow' });
+fastify.register(leaderboardRoutes, { prefix: '/leaderboard' });
 
 const start = async (): Promise<void> => {
   try {

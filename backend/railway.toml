@@ -1,0 +1,11 @@
+# Railway config for backend/ (root directory = backend when deploying this service).
+# Uses Dockerfile CMD (bun) — do NOT set a custom start command to npm in the dashboard.
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/api/stats"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
