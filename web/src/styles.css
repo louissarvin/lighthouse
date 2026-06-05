@@ -1,0 +1,761 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+@import '@fontsource/instrument-serif/latin-400-italic.css';
+@import '@mysten/dapp-kit/dist/index.css';
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ─── Design token layer ────────────────────────────────────────── */
+@theme {
+  /* ── Sui house motion ──────────────────────────────────────────── */
+  --ease-sui: cubic-bezier(0.51, 0, 0.08, 1);
+  --dur-fast: 0.18s;
+  --dur-base: 0.525s;
+  --dur-slow: 0.9s;
+  --dur-page: 1.2s;
+
+  /* ── Tusk surfaces ─────────────────────────────────────────────── */
+  --color-tusk: #faf8f5;
+  --color-ink: #0a0a0a;
+
+  /* ── Amber accent ──────────────────────────────────────────────── */
+  --color-amber: #fbbf24;
+  --color-amber-warm: #f59e0b;
+  --color-amber-deep: #d97706;
+
+  /* ── Radii ─────────────────────────────────────────────────────── */
+  --radius-pill: 18px;
+  --radius-card: 24px;
+  --radius-footer: 36px;
+
+  /* ── 48px editorial grid ───────────────────────────────────────── */
+  --grid-step: 48px;
+
+  /* Surfaces */
+  --color-lh-bg: #faf7f2;
+  --color-lh-bg-elev: #f2eee6;
+  --color-lh-bg-warm: #faf7f2;
+
+  /* Text */
+  --color-lh-text: #161412;
+  --color-lh-text-dim: #5c5751;
+  --color-lh-text-mute: #948d83;
+
+  /* Hairlines */
+  --color-lh-line: rgb(0 0 0 / 0.08);
+  --color-lh-line-mid: rgb(0 0 0 / 0.14);
+
+  /* Accent (backward-compatible alias; dark-mode override below) */
+  --color-lh-accent: #c98a0e;
+  --color-lh-accent-warm: #a56f08;
+
+  /* Beam (Concept C — type-as-lighthouse) */
+  --color-lh-beam: transparent;
+  --color-lh-beam-glow: transparent;
+  --color-lh-beam-edge: rgb(0 0 0 / 0.04);
+
+  /* Selection + focus */
+  --color-lh-selection-bg: rgb(240 180 41 / 0.25);
+  --color-lh-focus-ring: #c98a0e;
+
+  /* Motion easings (legacy — prefer --ease-sui for new work) */
+  --ease-entrance: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-exit: cubic-bezier(0.55, 0, 1, 0.45);
+  --ease-scrub: cubic-bezier(0.37, 0, 0.63, 1);
+  --ease-hover: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+
+  /* Motion durations (legacy — prefer --dur-* for new work) */
+  --duration-instant: 120ms;
+  --duration-quick: 300ms;
+  --duration-standard: 550ms;
+  --duration-slow: 900ms;
+}
+
+/* ─── Dark-mode token overrides ─────────────────────────────────── */
+:root {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+
+  --color-lh-bg: #0a0a0a;
+  --color-lh-bg-elev: #131313;
+  --color-lh-bg-warm: #faf7f2;
+
+  --color-lh-text: #faf8f5;
+  --color-lh-text-dim: #8a8a8a;
+  --color-lh-text-mute: #4a4a4a;
+
+  --color-lh-line: rgb(255 255 255 / 0.06);
+  --color-lh-line-mid: rgb(255 255 255 / 0.1);
+
+  --color-lh-accent: #fbbf24;
+  --color-lh-accent-warm: #f59e0b;
+
+  --color-lh-beam: rgb(251 191 36 / 0.55);
+  --color-lh-beam-glow: rgb(251 191 36 / 0.22);
+  --color-lh-beam-edge: rgb(255 255 255 / 0.06);
+
+  --color-lh-selection-bg: rgb(251 191 36 / 0.3);
+  --color-lh-focus-ring: #fbbf24;
+}
+
+/* ─── Z-index ladder ─────────────────────────────────────────────── */
+:root {
+  --z-base: 0;
+  --z-raised: 10;
+  --z-nav: 40;
+  --z-drawer: 50;
+  --z-modal: 60;
+  --z-toast: 70;
+}
+
+/* ─── Base layer ─────────────────────────────────────────────────── */
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply m-0 antialiased bg-lh-bg text-lh-text;
+    font-family:
+      'Inter Variable',
+      -apple-system,
+      BlinkMacSystemFont,
+      'Segoe UI',
+      'Roboto',
+      sans-serif;
+  }
+
+  code {
+    font-family:
+      'JetBrains Mono', 'Fira Code', source-code-pro, Menlo, Monaco, Consolas,
+      'Courier New', monospace;
+  }
+
+  ::selection {
+    background: var(--color-lh-selection-bg);
+    color: var(--color-lh-text);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-lh-focus-ring);
+    outline-offset: 2px;
+  }
+
+  /* Custom scrollbar — light */
+  html.light ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  html.light ::-webkit-scrollbar-track {
+    background: var(--color-lh-bg-elev);
+  }
+  html.light ::-webkit-scrollbar-thumb {
+    background: var(--color-lh-line-mid);
+    border-radius: 4px;
+  }
+  html.light ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-lh-text-mute);
+  }
+
+  /* Custom scrollbar — dark */
+  html.dark ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  html.dark ::-webkit-scrollbar-track {
+    background: var(--color-lh-bg-elev);
+  }
+  html.dark ::-webkit-scrollbar-thumb {
+    background: var(--color-lh-line-mid);
+    border-radius: 4px;
+  }
+  html.dark ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-lh-text-mute);
+  }
+}
+
+/* ─── View Transition rules (theme toggle circular reveal) ───────── */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-image-pair(root) {
+  isolation: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}
+
+/* ─── Registered custom properties for animated gradients ───────── */
+@property --lh-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+/* Separate angle property for GlowBorderButton so multiple instances
+   can animate independently without sharing --lh-angle state. */
+@property --lh-glow-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+/* ─── Keyframes ──────────────────────────────────────────────────── */
+@keyframes lh-beam-spin {
+  to {
+    --lh-angle: 360deg;
+  }
+}
+
+@keyframes lh-glow-border-spin {
+  to {
+    --lh-glow-angle: 360deg;
+  }
+}
+
+/* GlowBorderButton reduced motion — pause the arc rotation */
+@media (prefers-reduced-motion: reduce) {
+  .lh-glow-arc {
+    animation-play-state: paused !important;
+  }
+}
+
+@keyframes lh-beam-sweep {
+  0% {
+    background-position: 100% 50%;
+  }
+  50% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes lh-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes lh-typewriter {
+  from {
+    width: 0;
+  }
+  to {
+    width: 100%;
+  }
+}
+
+@keyframes lh-blink {
+  0%,
+  100% {
+    border-right-color: var(--color-lh-accent);
+  }
+  50% {
+    border-right-color: transparent;
+  }
+}
+
+@keyframes lh-layer-highlight {
+  0%,
+  100% {
+    stroke: var(--color-lh-line);
+    fill: var(--color-lh-bg-elev);
+  }
+  50% {
+    stroke: var(--color-lh-accent);
+    fill: rgb(240 180 41 / 0.06);
+  }
+}
+
+.lh-arch-layer-1 {
+  animation: lh-layer-highlight 7.5s ease-in-out 0s infinite;
+}
+.lh-arch-layer-2 {
+  animation: lh-layer-highlight 7.5s ease-in-out 1.5s infinite;
+}
+.lh-arch-layer-3 {
+  animation: lh-layer-highlight 7.5s ease-in-out 3s infinite;
+}
+.lh-arch-layer-4 {
+  animation: lh-layer-highlight 7.5s ease-in-out 4.5s infinite;
+}
+.lh-arch-layer-5 {
+  animation: lh-layer-highlight 7.5s ease-in-out 6s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lh-arch-layer-1,
+  .lh-arch-layer-2,
+  .lh-arch-layer-3,
+  .lh-arch-layer-4,
+  .lh-arch-layer-5 {
+    animation: none;
+  }
+}
+
+/* Shared diagram pulse — executor box and walrus blob use the same keyframe.
+   6s period, stroke-opacity between 0.6 and 1.0, sine-like ease-in-out.
+   Extracted as a single class to prevent two divergent implementations. */
+@keyframes lh-arch-pulse {
+  0%,
+  100% {
+    stroke-opacity: 1;
+  }
+  50% {
+    stroke-opacity: 0.6;
+  }
+}
+
+.lh-arch-executor,
+.lh-arch-blob-pulse {
+  animation: lh-arch-pulse 6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lh-arch-executor,
+  .lh-arch-blob-pulse {
+    animation: none;
+    stroke-opacity: 1;
+  }
+}
+
+/* ─── Utility classes ────────────────────────────────────────────── */
+
+/* Primary CTA — amber arc sweeps border in dark mode */
+.lh-cta {
+  position: relative;
+  isolation: isolate;
+  border-radius: 9999px;
+}
+
+.lh-cta::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--lh-angle),
+    transparent 0deg,
+    transparent 290deg,
+    rgb(245 197 24 / 0.2) 310deg,
+    rgb(245 197 24 / 1) 345deg,
+    rgb(245 197 24 / 0.2) 360deg
+  );
+  animation: lh-beam-spin 6s linear infinite;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  -webkit-mask-composite: destination-out;
+  pointer-events: none;
+}
+
+.dark .lh-cta::before {
+  background: conic-gradient(
+    from var(--lh-angle),
+    transparent 0deg,
+    transparent 290deg,
+    rgb(245 197 24 / 0.15) 310deg,
+    rgb(245 197 24 / 0.9) 345deg,
+    rgb(245 197 24 / 0.15) 360deg
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lh-cta::before {
+    animation: none;
+    background: rgb(245 197 24 / 0.3);
+  }
+}
+
+/* Hero italic accent word - beam gradient sweep.
+   Fixed bright amber values, theme-independent: the hero now has a dark
+   gradient overlay in both light and dark modes, so this brand moment
+   should shine the same in both contexts. */
+.lh-beam-word {
+  font-family: 'Instrument Serif', Georgia, 'Times New Roman', serif;
+  font-style: italic;
+  color: #fbbf24;
+  background: linear-gradient(90deg, #fbbf24 0%, #fde68a 40%, #fbbf24 80%);
+  background-size: 200% 100%;
+  background-position: 0% 50%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 18px rgb(251 191 36 / 0.45));
+  animation: lh-beam-sweep 9s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lh-beam-word {
+    animation: none;
+    background-position: 50% 50%;
+  }
+}
+
+/* SVG mark beam glow — token-driven, zero cost in light mode */
+.lh-mark-beam {
+  filter: drop-shadow(0 0 6px var(--color-lh-beam-glow));
+}
+
+/* Wordmark glow — token-driven, zero cost in light mode */
+.lh-wordmark-glow {
+  text-shadow: 0 0 12px var(--color-lh-beam-glow);
+  transition: text-shadow 0.3s ease;
+}
+
+/* Status pulse dot */
+.lh-pulse-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: var(--color-lh-accent);
+  animation: lh-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+@keyframes lh-ping {
+  75%,
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lh-pulse-dot::after {
+    animation: none;
+  }
+}
+
+/* CSS marquee track */
+.lh-marquee-track {
+  animation: lh-marquee 36s linear infinite;
+}
+
+/* Pause marquee when the section is scrolled out of view */
+.lh-marquee-track[data-active='false'] {
+  animation-play-state: paused;
+}
+
+.lh-marquee {
+  position: relative;
+  overflow: hidden;
+}
+
+.lh-marquee::before,
+.lh-marquee::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 140px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.lh-marquee::before {
+  left: 0;
+  background: linear-gradient(
+    to right,
+    var(--color-lh-bg) 0%,
+    var(--color-lh-bg) 20%,
+    transparent 100%
+  );
+}
+
+.lh-marquee::after {
+  right: 0;
+  background: linear-gradient(
+    to left,
+    var(--color-lh-bg) 0%,
+    var(--color-lh-bg) 20%,
+    transparent 100%
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lh-marquee-track {
+    animation-play-state: paused;
+  }
+}
+
+/* Primitives card marquee — slower cycle than logo marquee (48s vs 36s) */
+.lh-primitives-track {
+  animation-duration: 48s;
+}
+
+/* Hero trust marquee — faster than footer (24s vs 36s), tighter feel */
+.lh-hero-marquee-track {
+  animation-duration: 24s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lh-hero-marquee-track {
+    animation-play-state: paused;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lh-primitives-track {
+    animation: none;
+    transform: translateX(0);
+  }
+}
+
+/* Typewriter — terminal panels only */
+.lh-typewriter {
+  overflow: hidden;
+  white-space: nowrap;
+  border-right: 2px solid var(--color-lh-accent);
+  width: 0;
+  animation:
+    lh-typewriter 2.8s steps(40) forwards,
+    lh-blink 0.8s step-end infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lh-typewriter {
+    width: 100%;
+    animation: none;
+    border-right: none;
+  }
+}
+
+/* Glass surface — floating pill nav */
+.lh-glass {
+  background: rgb(250 247 242 / 0.85);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  border: 1px solid var(--color-lh-line);
+  box-shadow:
+    0 1px 0 0 rgb(255 255 255 / 0.8) inset,
+    0 4px 16px rgb(0 0 0 / 0.08);
+}
+
+.dark .lh-glass {
+  background: rgb(10 10 10 / 0.65);
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  border: 1px solid var(--color-lh-line);
+  box-shadow:
+    0 1px 0 0 rgb(255 255 255 / 0.04) inset,
+    0 8px 32px rgb(0 0 0 / 0.24);
+}
+
+/* Word reveal — SSR pre-state so there is no flash of full-opacity text */
+.lh-word {
+  opacity: 0.15;
+  display: inline-block;
+}
+
+/* Cards scroller — hide native scrollbar (pivy-style clean horizontal scroll) */
+.lh-cards-track {
+  scrollbar-width: none;
+}
+.lh-cards-track::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── WalrusDiagram node stagger + erasure line draw ──────────────── */
+
+/* Node groups: start invisible + scaled down. Armed by [data-visible='true']
+   on the parent SVG. Uses --node-index (set inline) for stagger timing. */
+.lh-walrus-node {
+  opacity: 1;
+  transform: scale(1);
+  transform-origin: center;
+  transform-box: fill-box;
+}
+
+svg[data-visible='false'] .lh-walrus-node {
+  opacity: 0;
+  transform: scale(0.7);
+}
+
+svg[data-visible='true'] .lh-walrus-node {
+  animation: lh-walrus-node-in 0.55s var(--ease-sui) both;
+  animation-delay: calc(var(--node-index) * 80ms);
+}
+
+@keyframes lh-walrus-node-in {
+  from {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Erasure lines: stroke-dashoffset draws from 60 to 0, same stagger. */
+.lh-walrus-line {
+  stroke-dashoffset: 0;
+}
+
+svg[data-visible='false'] .lh-walrus-line {
+  stroke-dashoffset: 60;
+}
+
+svg[data-visible='true'] .lh-walrus-line {
+  animation: lh-walrus-line-in 0.55s var(--ease-sui) both;
+  animation-delay: calc(var(--node-index) * 80ms);
+}
+
+@keyframes lh-walrus-line-in {
+  from {
+    stroke-dashoffset: 60;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  svg[data-visible='false'] .lh-walrus-node,
+  svg[data-visible='false'] .lh-walrus-line {
+    opacity: 1;
+    transform: scale(1);
+    stroke-dashoffset: 0;
+  }
+
+  svg[data-visible='true'] .lh-walrus-node,
+  svg[data-visible='true'] .lh-walrus-line {
+    animation: none;
+    opacity: 1;
+    transform: scale(1);
+    stroke-dashoffset: 0;
+  }
+}
+
+/* 48px editorial grid texture — apply to dark sections only */
+.lh-grid-bg {
+  background-image:
+    linear-gradient(to right, rgb(255 255 255 / 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(255 255 255 / 0.04) 1px, transparent 1px);
+  background-size: var(--grid-step) var(--grid-step);
+}
+
+:where(html.light) .lh-grid-bg {
+  background-image:
+    linear-gradient(to right, rgb(0 0 0 / 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(0 0 0 / 0.04) 1px, transparent 1px);
+}
+
+/* ─── Docs prose ─────────────────────────────────────────────────── */
+/* Scoped to .prose-docs so it never leaks outside the docs layout.  */
+
+.prose-docs p {
+  color: var(--color-lh-text-dim);
+  font-size: 0.9375rem;
+  line-height: 1.75;
+  margin-bottom: 1.25rem;
+}
+
+.prose-docs ul,
+.prose-docs ol {
+  color: var(--color-lh-text-dim);
+  font-size: 0.9375rem;
+  line-height: 1.75;
+  padding-left: 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.prose-docs ul {
+  list-style-type: disc;
+}
+.prose-docs ol {
+  list-style-type: decimal;
+}
+.prose-docs li {
+  margin-bottom: 0.35rem;
+}
+
+.prose-docs strong {
+  color: var(--color-lh-text);
+  font-weight: 600;
+}
+
+.prose-docs a {
+  color: var(--color-lh-accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.prose-docs a:hover {
+  color: var(--color-lh-accent-warm);
+}
+
+/* Inline code (backtick spans not inside a CodeBlock) */
+.prose-docs :not(pre) > code {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.8125rem;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  background: var(--color-lh-bg-elev);
+  color: var(--color-lh-text);
+  border: 1px solid var(--color-lh-line);
+}
+
+/* Tables */
+.prose-docs table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  margin-bottom: 1.5rem;
+  color: var(--color-lh-text-dim);
+}
+
+.prose-docs thead {
+  border-bottom: 1px solid var(--color-lh-line-mid);
+}
+
+.prose-docs th {
+  text-align: left;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-lh-text-mute);
+  padding: 0.5rem 1rem 0.5rem 0;
+  white-space: nowrap;
+}
+
+.prose-docs td {
+  padding: 0.65rem 1rem 0.65rem 0;
+  vertical-align: top;
+  border-bottom: 1px solid var(--color-lh-line);
+  line-height: 1.55;
+}
+
+.prose-docs tr:last-child td {
+  border-bottom: none;
+}
+
+.prose-docs td code,
+.prose-docs th code {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.75rem;
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  background: var(--color-lh-bg-elev);
+  color: var(--color-lh-text);
+  border: 1px solid var(--color-lh-line);
+  white-space: nowrap;
+}
