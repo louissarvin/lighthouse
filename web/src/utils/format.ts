@@ -226,3 +226,29 @@ export const formatSuiAddress = (
   if (!addr || addr.length <= startChars + endChars + 3) return addr
   return `${addr.slice(0, startChars)}...${addr.slice(-endChars)}`
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Suiscan URL helpers
+// ────────────────────────────────────────────────────────────────────────
+// Imported lazily to avoid circular deps (config imports nothing from format).
+
+const SUISCAN_BASE =
+  typeof window !== 'undefined'
+    ? (() => {
+        // Read from the same env var that config.ts uses.
+        const network = (import.meta.env.VITE_SUI_NETWORK as string | undefined) ?? 'testnet'
+        return `https://suiscan.xyz/${network}`
+      })()
+    : 'https://suiscan.xyz/testnet'
+
+export function suiscanObjectUrl(objectId: string): string {
+  return `${SUISCAN_BASE}/object/${objectId}`
+}
+
+export function suiscanTxUrl(digest: string): string {
+  return `${SUISCAN_BASE}/tx/${digest}`
+}
+
+export function suiscanAccountUrl(address: string): string {
+  return `${SUISCAN_BASE}/account/${address}`
+}
