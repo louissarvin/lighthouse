@@ -384,6 +384,18 @@ export interface PublicProfileLatestTearsheet {
   publicTearsheetUrl: string
 }
 
+export interface PublicProfileRecentTrade {
+  id: string
+  side: 'bid' | 'ask'
+  pool: string
+  price: string
+  quantity: string
+  notional: string
+  txDigest: string | null
+  walrusBlobId: string | null
+  createdAt: number
+}
+
 export interface PublicProfileResponse {
   suinsName: string
   suiAddress: string
@@ -392,6 +404,15 @@ export interface PublicProfileResponse {
   executorAgentId: string | null
   walrusSiteObjectId: string | null
   createdAt: string
+  // Enriched fields added by backend (may be absent on older responses)
+  avatarBlobId?: string | null
+  avatarUrl?: string | null
+  bio?: string | null
+  memberSinceMs?: number | null
+  tradesPlaced?: number | null
+  anchorCount?: number | null
+  totalNotional?: string | null
+  recentTrades?: Array<PublicProfileRecentTrade> | null
   counts: {
     tradesPlaced: number
     // / Protocol-wide count of audit anchors recorded by Lighthouse (not
@@ -400,6 +421,52 @@ export interface PublicProfileResponse {
     lighthouseAnchorsTotal: number
   }
   latestTearsheet: PublicProfileLatestTearsheet | null
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Leaderboard
+// ────────────────────────────────────────────────────────────────────────
+
+export type LeaderboardMetric = 'trades' | 'anchors' | 'notional'
+
+export interface LeaderboardEntry {
+  rank: number
+  suiAddress: string
+  suinsName: string | null
+  avatarBlobId: string | null
+  avatarUrl: string | null
+  tradesPlaced: number
+  anchorCount: number
+  totalNotional: string
+  memberSinceMs: number | null
+}
+
+export interface LeaderboardResponse {
+  metric: LeaderboardMetric
+  entries: Array<LeaderboardEntry>
+  generatedAt: string
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Avatar + bio mutations
+// ────────────────────────────────────────────────────────────────────────
+
+export interface AvatarSetRequest {
+  blobId: string
+  mimeType: string
+}
+
+export interface AvatarSetResponse {
+  avatarBlobId: string
+  avatarUrl: string
+}
+
+export interface BioSetRequest {
+  bio: string
+}
+
+export interface BioSetResponse {
+  bio: string
 }
 
 export interface TearsheetResponse {
@@ -481,6 +548,25 @@ export interface AuditGrantResponse {
   digest: string
   bytes: string
   note?: string
+}
+
+export interface AuditCap {
+  capId: string
+  profileObjectId: string
+  ownerAddress: string
+  validUntilMs: number
+}
+
+export interface AuditCapsResponse {
+  caps: Array<AuditCap>
+  unavailable?: boolean
+  reason?: string
+}
+
+export interface AuditDecryptResponse {
+  data?: unknown
+  unavailable?: boolean
+  reason?: string
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -623,10 +709,86 @@ export interface NotificationItem {
 }
 
 // ────────────────────────────────────────────────────────────────────────
+// Messaging transcript
+// ────────────────────────────────────────────────────────────────────────
+
+export interface MessagingMessage {
+  id: string
+  sender: string
+  text: string
+  timestampMs: number
+}
+
+export interface MessagingListResponse {
+  messages: Array<MessagingMessage>
+  unavailable?: boolean
+  reason?: string
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Tearsheet on-demand build
+// ────────────────────────────────────────────────────────────────────────
+
+export interface TearsheetBuildNowResponse {
+  week: string
+  walrusBlobId: string
+  publicTearsheetUrl: string
+  totalTrades: number
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Follow feed
+// ────────────────────────────────────────────────────────────────────────
+
+export interface FollowFeedTrade {
+  id: string
+  side: 'bid' | 'ask'
+  pool: string
+  price: string
+  quantity: string
+  notional: string
+  txDigest: string | null
+  walrusBlobId: string | null
+  createdAt: number
+}
+
+export interface FollowFeedResponse {
+  trades: Array<FollowFeedTrade>
+  profile?: {
+    suinsName: string | null
+    suiAddress: string
+    totalTrades: number
+    winRate: number | null
+  } | null
+  unavailable?: boolean
+  reason?: string
+}
+
+// ────────────────────────────────────────────────────────────────────────
 // Agent-signed trade
 // ────────────────────────────────────────────────────────────────────────
 
 export interface PlaceAsAgentResponse {
   digest: string
   clientOrderId: string
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Worker status (GET /stats/workers)
+// ────────────────────────────────────────────────────────────────────────
+
+export interface WorkerStatus {
+  name: string
+  last_run_ms: number | null
+  last_run_duration_ms: number | null
+  ok: boolean
+  rate_limited_until_ms?: number | null
+}
+
+export interface WorkerStatsResponse {
+  workers: Array<WorkerStatus>
+  // / Convenience: the most recently run worker's timestamp across all workers.
+  latest_run_ms: number | null
+  // / True if ALL workers are healthy.
+  all_ok: boolean
 }
