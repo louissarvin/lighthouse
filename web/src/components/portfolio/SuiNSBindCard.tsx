@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { ExternalLink } from 'lucide-react'
 
 import type { ProfileMe, SponsorBuildResponse } from '@/lib/types'
 import { Card } from '@/components/ui/Card'
@@ -7,6 +8,7 @@ import { cnm } from '@/utils/style'
 import { config } from '@/config'
 import { ApiError, apiFetch } from '@/lib/api'
 import { useExecuteSponsored } from '@/lib/sponsored'
+import { suiscanObjectUrl } from '@/utils/format'
 
 interface Props {
   profile: ProfileMe
@@ -114,11 +116,20 @@ export function SuiNSBindCard({ profile }: Props) {
           value={profile.suinsName ?? 'not set'}
           mono={!!profile.suinsName}
         />
-        <Field
-          label="Trader profile"
-          value={profile.profileObjectId.slice(0, 12) + '…'}
-          mono
-        />
+        <div className="rounded-xl border border-lh-line bg-lh-bg/40 px-3 py-2.5">
+          <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-lh-text-mute mb-0.5">
+            Trader profile
+          </p>
+          <a
+            href={suiscanObjectUrl(profile.profileObjectId)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 font-mono text-xs text-lh-text hover:text-lh-accent transition-colors break-all"
+          >
+            {profile.profileObjectId.slice(0, 12)}…
+            <ExternalLink size={10} strokeWidth={1.5} aria-hidden="true" />
+          </a>
+        </div>
       </div>
 
       {profile.suinsName && <ShareLink suinsName={profile.suinsName} />}

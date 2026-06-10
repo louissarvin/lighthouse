@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { ExternalLink } from 'lucide-react'
 
 import { useQueryClient } from '@tanstack/react-query'
 import type { ProfileMe, SponsorBuildResponse } from '@/lib/types'
@@ -7,6 +8,7 @@ import { apiFetch } from '@/lib/api'
 import { useExecuteSponsored } from '@/lib/sponsored'
 import { cnm } from '@/utils/style'
 import { config } from '@/config'
+import { suiscanObjectUrl } from '@/utils/format'
 
 interface Props {
   profile: ProfileMe
@@ -68,9 +70,20 @@ export function RevokeAgentCard({ profile, disabled }: Props) {
       </p>
 
       <div className="rounded-xl bg-lh-bg/40 border border-lh-line p-4 text-xs space-y-1 mb-5">
-        <p className="font-mono uppercase tracking-[0.12em] text-lh-text-mute">
-          Atomic PTB
-        </p>
+        <div className="flex items-center justify-between mb-1">
+          <p className="font-mono uppercase tracking-[0.12em] text-lh-text-mute">
+            Atomic PTB
+          </p>
+          <a
+            href={suiscanObjectUrl(profile.executorAgentId)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 font-mono text-[10px] text-lh-text-mute hover:text-lh-accent transition-colors"
+          >
+            View on Suiscan
+            <ExternalLink size={10} strokeWidth={1.5} aria-hidden="true" />
+          </a>
+        </div>
         <ol className="font-mono text-lh-text-dim list-decimal pl-5 space-y-0.5">
           <li>executor::revoke</li>
           <li>audit_anchor::record (kind = revocation)</li>

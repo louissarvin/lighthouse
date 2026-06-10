@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { ExternalLink } from 'lucide-react'
 
 import type { AgentSnapshotResponse, ProfileMe } from '@/lib/types'
 import { Card } from '@/components/ui/Card'
@@ -7,6 +8,7 @@ import { apiFetch } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { cnm } from '@/utils/style'
 import { config } from '@/config'
+import { suiscanObjectUrl } from '@/utils/format'
 
 function shortId(s: string | null | undefined, head = 6, tail = 4): string {
   if (!s) return '—'
@@ -109,21 +111,25 @@ export function ProfileCard({ profile }: Props) {
           </a>
 
           <dl className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3 text-sm">
-            <Row
+            <LinkedRow
               label="Profile object"
               value={shortId(profile.profileObjectId, 10, 6)}
+              href={suiscanObjectUrl(profile.profileObjectId)}
             />
-            <Row
+            <LinkedRow
               label="BalanceManager"
               value={shortId(profile.balanceManagerId, 10, 6)}
+              href={profile.balanceManagerId ? suiscanObjectUrl(profile.balanceManagerId) : null}
             />
-            <Row
+            <LinkedRow
               label="ExecutorAgent"
               value={shortId(profile.executorAgentId, 10, 6)}
+              href={profile.executorAgentId ? suiscanObjectUrl(profile.executorAgentId) : null}
             />
-            <Row
+            <LinkedRow
               label="MemWal account"
               value={shortId(profile.memwalAccountId, 10, 6)}
+              href={profile.memwalAccountId ? suiscanObjectUrl(profile.memwalAccountId) : null}
             />
           </dl>
         </div>
@@ -210,6 +216,39 @@ function Row({
         )}
       >
         {value}
+      </dd>
+    </div>
+  )
+}
+
+function LinkedRow({
+  label,
+  value,
+  href,
+}: {
+  label: string
+  value: string
+  href: string | null
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-4">
+      <dt className="text-lh-text-mute text-xs uppercase tracking-[0.12em] font-mono shrink-0">
+        {label}
+      </dt>
+      <dd className="font-mono tabular-nums text-sm truncate text-right">
+        {href ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-lh-text-dim hover:text-lh-accent transition-colors"
+          >
+            {value}
+            <ExternalLink size={10} strokeWidth={1.5} aria-hidden="true" />
+          </a>
+        ) : (
+          <span className="text-lh-text-dim">{value}</span>
+        )}
       </dd>
     </div>
   )

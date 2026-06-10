@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/Card'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { apiFetch } from '@/lib/api'
 import { cnm } from '@/utils/style'
+import { suiscanObjectUrl, suiscanAccountUrl } from '@/utils/format'
 
 function shortId(s: string | null | undefined, head = 6, tail = 4): string {
   if (!s) return '—'
@@ -100,7 +101,7 @@ export function BalancesCard() {
                 />
                 {data.balanceManager.objectId && (
                   <a
-                    href={`https://suiscan.xyz/testnet/object/${data.balanceManager.objectId}`}
+                    href={suiscanObjectUrl(data.balanceManager.objectId)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className={cnm(
@@ -132,6 +133,19 @@ export function BalancesCard() {
                     value={`${data.predictManager.positionCount} open`}
                   />
                 )}
+                {data.predictManager.objectId && (
+                  <a
+                    href={suiscanObjectUrl(data.predictManager.objectId)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={cnm(
+                      'inline-block mt-1.5 font-mono text-[10px] text-lh-text-mute',
+                      'hover:text-lh-accent transition-colors',
+                    )}
+                  >
+                    {shortId(data.predictManager.objectId)} ↗
+                  </a>
+                )}
               </>
             ) : (
               <p className="text-xs text-lh-text-mute">Not set up</p>
@@ -148,7 +162,7 @@ export function BalancesCard() {
                   <BalanceRow label="DUSDC" value={data.wallet.dusdc} />
                 )}
                 <a
-                  href={`https://suiscan.xyz/testnet/account/${data.wallet.suiAddress}`}
+                  href={suiscanAccountUrl(data.wallet.suiAddress)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className={cnm(
