@@ -7,6 +7,7 @@ import { Container } from '@/components/ui/Container'
 import { EyebrowTag } from '@/components/ui/EyebrowTag'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { ProfileCard } from '@/components/portfolio/ProfileCard'
+import { ProfileEditorCard } from '@/components/portfolio/ProfileEditorCard'
 import { AnchorTimeline } from '@/components/portfolio/AnchorTimeline'
 import { TradesTable } from '@/components/portfolio/TradesTable'
 import { TearsheetList } from '@/components/portfolio/TearsheetList'
@@ -92,6 +93,8 @@ function ResolvedProfile({
   return (
     <div className="space-y-8">
       <ProfileCard profile={profile} />
+
+      <ProfileEditorCard profile={profile} />
 
       <NotificationsCard />
 
