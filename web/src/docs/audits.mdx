@@ -1,0 +1,112 @@
+---
+title: Contract Status
+description: Deployed package facts, module layout, test coverage, and honest assessment of the current audit status.
+section: Audits
+toc:
+  - id: deployment
+    text: Deployment
+    level: 2
+  - id: modules
+    text: Modules
+    level: 2
+  - id: testing
+    text: Testing
+    level: 2
+  - id: deepbook-and-pools
+    text: DeepBook and Pools
+    level: 2
+  - id: kill-switch
+    text: Kill Switch
+    level: 2
+  - id: current-status
+    text: Current Status
+    level: 2
+  - id: known-caveats
+    text: Known Caveats
+    level: 2
+  - id: planned-audit-path
+    text: Planned Audit Path
+    level: 2
+---
+
+import { Callout } from '../components/docs/Callout'
+import { ProseH2 } from '../components/docs/ProseH2'
+
+<ProseH2 id="deployment">Deployment</ProseH2>
+
+The Lighthouse Move package lives on Sui testnet. The package has been upgraded; two IDs matter:
+
+| Role                                    | ID                                                                   |
+| :-------------------------------------- | :------------------------------------------------------------------- |
+| original-id (use for Move call targets) | `0x150ae38deaf5a71e04106a6487a3779099ac1f19eeaffc1b7e83b6c43157f744` |
+| published-at (latest upgrade, v3)       | `0x3865cee0905149480eb3394e6e31aa709093b5134d49e9e701cf4565d5822831` |
+| Version shared object                   | `0x3b989979ca29e58d39e547687d5538f49ac7db463565111d8a6fd909ac2e78aa` |
+
+The package targets Move edition `2024`.
+
+<ProseH2 id="modules">Modules</ProseH2>
+
+Five modules make up the package:
+
+- `version` — live version gate; asserted by every entry function across the package.
+- `allowlist` — embedded grants for copy-trader and audit access.
+- `audit_anchor` — on-chain pointer to Walrus blobs; written in the same PTB as the action it audits.
+- `trader_profile` — per-user profile registry and SEAL policy gate.
+- `executor` — capability-scoped DeepBook v3 trading agent with on-chain budget enforcement.
+
+<ProseH2 id="testing">Testing</ProseH2>
+
+The package ships with **43 unit tests**, all passing. Run them with:
+
+```bash
+sui move test
+```
+
+<ProseH2 id="deepbook-and-pools">DeepBook and Pools</ProseH2>
+
+The `executor` module integrates with the `deepbook-v3` package for spot orderbook execution. Three pools are supported in the current configuration:
+
+- SUI / DBUSDC
+- DEEP / SUI
+- WAL / SUI
+
+The whitelisted pool set is asserted on chain inside `place_limit_under_budget`.
+
+<ProseH2 id="kill-switch">Kill Switch</ProseH2>
+
+Every entry function in the Lighthouse package asserts `version::check_is_valid` before doing any work. Bumping the `Version` shared object disables all writes across the package in one transaction. The kill switch is built into the contract, not bolted on at the backend.
+
+<ProseH2 id="current-status">Current Status</ProseH2>
+
+Lighthouse was built during Sui Overflow 2026. No formal security audit has been completed at submission time. The Move contracts are new. The MemWal integration runs on a beta relayer. SEAL key servers on testnet have no published SLA.
+
+<Callout variant="warn">
+  Lighthouse v1 is a hackathon submission running on Sui testnet. The protocol
+  has not been reviewed by an independent security firm. Do not commit
+  significant funds until an audit is completed and published.
+</Callout>
+
+The modules that carry the most risk are:
+
+- `lighthouse::executor` — budget enforcement for per-trade and per-day notional. An error in the notional calculation or window reset could let the agent exceed the user's intended budget.
+- `lighthouse::trader_profile` — SEAL policy gate. An error in `check_id_prefix` or `seal_approve_copy_trader` could let unauthorized parties obtain decryption keys.
+- `lighthouse::allowlist` — embedded grant structure. An error could let grants persist after revocation.
+
+<ProseH2 id="known-caveats">Known Caveats</ProseH2>
+
+**Budget unit convention.** `place_limit_under_budget` computes notional as `price * quantity / 1e9` where both price and quantity are FLOAT_SCALING'd values. The `max_notional_per_trade` and `max_notional_per_day` caps must be calibrated against this formula for each pool. Use `devInspect` against a known reference trade to verify the units before mainnet use.
+
+**SEAL version-1 lock.** Any upgrade to the Lighthouse Move package breaks all active `SessionKey` instances. This is a current SEAL SDK constraint, not a bug in Lighthouse, but it affects operational flexibility.
+
+**MemWal beta relayer.** MemWal is pre-1.0 beta software with no SLA on the hosted relayer. Self-hosting is supported; the source is open.
+
+**Testnet SEAL key servers.** No published uptime SLA. With the minimum 2-of-2 threshold, any single server outage breaks decryption. Before mainnet, provision at least three independent key servers with a 2-of-3 threshold.
+
+<ProseH2 id="planned-audit-path">Planned Audit Path</ProseH2>
+
+1. Fix any issues surfaced by community review during the judging period.
+2. Commission an independent audit of `lighthouse::executor` and `lighthouse::trader_profile` from a Sui-specialized firm.
+3. Publish the audit report and any remediation here.
+4. Update the `TrustSection` on the protocol page to reflect audit status.
+
+Until an audit report is published here, treat the protocol as experimental. The full source is open for review.

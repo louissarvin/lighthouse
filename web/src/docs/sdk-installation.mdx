@@ -1,0 +1,113 @@
+---
+title: SDK Installation
+description: Exact bun install commands and version pins for all six core Sui-stack primitives and supporting packages.
+section: Getting Started
+toc:
+  - id: core-primitives
+    text: Core Primitives
+    level: 2
+  - id: supporting-packages
+    text: Supporting Packages
+    level: 2
+  - id: version-pinning-rationale
+    text: Version Pinning Rationale
+    level: 2
+  - id: public-sdk
+    text: Public SDK
+    level: 2
+---
+
+import { Callout } from '../components/docs/Callout'
+import { ProseH2 } from '../components/docs/ProseH2'
+import { CodeBlock } from '../components/docs/CodeBlock'
+
+<ProseH2 id="core-primitives">Core Primitives</ProseH2>
+
+These six packages are load-bearing. Removing any one breaks the product.
+
+<CodeBlock lang="bash" code={`# Sui core: PTBs, SuiClient, transaction building, zkLogin
+bun add @mysten/sui@^2.13.2
+
+# MemWal: cross-session encrypted agent memory (beta, pin exact)
+
+bun add @mysten-incubation/memwal@0.0.7
+
+# Walrus: encrypted blob storage, Quilts, weekly reports
+
+bun add @mysten/walrus@^1.1.7
+
+# SEAL: threshold IBE encryption + Move access policy (pin exact)
+
+bun add @mysten/seal@1.1.3
+
+# DeepBook v3: spot CLOB execution
+
+bun add @mysten/deepbook-v3@^1.4.1
+
+# Atoma: decentralized AI inference (standard endpoint v1)
+
+bun add atoma-sdk@^0.2.1`} />
+
+<ProseH2 id="supporting-packages">Supporting Packages</ProseH2>
+
+<CodeBlock lang="bash" code={`# zkLogin provider support (subpath of @mysten/sui, not standalone)
+# Already included with @mysten/sui above
+
+# Enoki: sponsored gas, embedded wallets
+
+bun add @mysten/enoki@^1.0.0
+
+# dApp Kit: React components for wallet connection
+
+bun add @mysten/dapp-kit@^1.0.6
+
+# Sui Stack Messaging: encrypted persistent chat groups (pin exact, pre-1.0)
+
+bun add @mysten/sui-stack-messaging@0.0.2 @mysten/sui-groups@0.0.1
+
+# SuiNS: lighthouse.sui resolver for Walrus Site
+
+bun add @mysten/suins@^1.1.4
+
+# Zod: runtime validation for Atoma response parsing
+
+bun add zod@^3.23.0`} />
+
+<Callout variant="warn">
+  DeepBook Predict is testnet-only and lives on a separate branch
+  (`predict-testnet-4-16`). It is not yet published to npm. If you are
+  implementing the optional hedge leg, clone `MystenLabs/deepbook-v3` on that
+  branch and reference the local package. Do not attempt to install it from npm.
+</Callout>
+
+<ProseH2 id="version-pinning-rationale">Version Pinning Rationale</ProseH2>
+
+Several packages in this stack are pre-1.0 beta software with weekly breaking changes. The pins below are the last known-good versions as of the Sui Overflow 2026 build window.
+
+| Package                       | Pin           | Reason                                                                                                                                                                            |
+| ----------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@mysten-incubation/memwal`   | `0.0.7` exact | Pre-1.0; API surface changed between 0.0.5 and 0.0.7. MemWal is under active development.                                                                                         |
+| `@mysten/seal`                | `1.1.3` exact | The `getAllowlistedKeyServers` helper was removed from the dist in versions after 1.1.3. Pin to 1.1.3 and hardcode the testnet key server object IDs from the SEAL documentation. |
+| `@mysten/sui-stack-messaging` | `0.0.2` exact | Pre-1.0. The `createSuiStackMessagingClient` factory name changed from `createMessagingGroupsClient` in an earlier version.                                                       |
+| `@mysten/sui-groups`          | `0.0.1` exact | Pre-1.0.                                                                                                                                                                          |
+
+<Callout variant="info">
+  After the hackathon, check `@mysten/dapp-kit` for the v2 ecosystem split. The
+  package was divided into `@mysten/dapp-kit-react@^2.0.3` and
+  `@mysten/dapp-kit-core@^1.3.2` as of June 2026. The install command above
+  targets the pre-split v1 package which is still published and functional.
+  Migrate to v2 after the hackathon submission.
+</Callout>
+
+<ProseH2 id="public-sdk">Public SDK</ProseH2>
+
+<Callout variant="info">
+  A standalone `@lighthouse-sui/sdk` npm package is planned for v2. It will
+  provide typed wrappers for the Lighthouse Move module call surface:
+  `createAgent`, `placeOrder`, `revoke`, `grantCopyTrader`, `grantAudit`. For
+  v1, callers interact with the Move modules directly via
+  `@mysten/sui/transactions` PTBs as documented in the Walrus Integration and
+  SEAL Policies sections.
+</Callout>
+
+Until the public SDK ships, integrate directly using the Move module targets published to the Lighthouse package ID. All four modules (`trader_profile`, `executor`, `audit_anchor`, `allowlist`) are open source and visible on Suiscan.
