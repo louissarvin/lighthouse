@@ -1,0 +1,18 @@
+node_modules
+# Keep environment variables out of version control
+.env
+.env.local
+.env.production
+
+# Prisma generated client
+prisma/generated
+
+# Private key files (Sui Ed25519 .key exports, etc.)
+# Defense in depth — canonical location is ~/.lighthouse/keys/ (off-tree),
+# but block anything that lands in-tree by accident.
+*.key
+**/*.key
+0x*.key
+
+# OS junk
+.DS_Store
