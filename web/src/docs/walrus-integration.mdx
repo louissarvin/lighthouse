@@ -1,0 +1,169 @@
+---
+title: Blob Writes & Quilt
+description: How Lighthouse writes SEAL-encrypted blobs to Walrus, the weekly Quilt layout, epoch math, and the audit_anchor on-chain pattern.
+section: Walrus Integration
+toc:
+  - id: blob-writes
+    text: Blob Writes
+    level: 2
+  - id: the-writeblog-call
+    text: The writeBlob Call
+    level: 2
+  - id: quilt-layout
+    text: Quilt Layout
+    level: 2
+  - id: audit-anchor
+    text: Audit Anchor
+    level: 2
+  - id: cost-math
+    text: Cost Math
+    level: 2
+---
+
+import { Callout } from '../components/docs/Callout'
+import { ProseH2 } from '../components/docs/ProseH2'
+import { CodeBlock } from '../components/docs/CodeBlock'
+
+<ProseH2 id="blob-writes">Blob Writes</ProseH2>
+
+Every coaching decision Lighthouse makes produces two Walrus blobs. The first is the recommendation blob: a JSON record of the user prompt, recalled memory context, Atoma model attestation, proposed trade parameters, and Guardian pre-flight check results. The second is the trade settlement blob: a record of the on-chain transaction digest, order ID, fill price, and executed quantity. Both are encrypted with SEAL before being written.
+
+Blobs are written after the on-chain trade transaction confirms. The Walrus write is always secondary to the on-chain state: if the write fails, the on-chain audit anchor still exists and the trade is not lost. The blob write can be retried. The on-chain transaction cannot be undone.
+
+Each blob is identified by a `blobId`: a content-addressed hash returned by the Walrus publisher. Lighthouse stores this `blobId` in the `lighthouse::audit_anchor` Move object alongside the Sui transaction digest, creating a verifiable link between the off-chain memory and the on-chain execution record.
+
+<ProseH2 id="the-writeblog-call">The writeBlob Call</ProseH2>
+
+Lighthouse uses the `@mysten/walrus` SDK with the upload-relay signing path. The public unauthenticated publisher is available on testnet but not on mainnet; the upload-relay approach works on both networks.
+
+<CodeBlock lang="typescript" code={`import { SuiGrpcClient } from "@mysten/sui/grpc";
+import { walrus } from "@mysten/walrus";
+
+const sui = new SuiGrpcClient({
+network: process.env.SUI_NETWORK as "testnet" | "mainnet",
+baseUrl: process.env.SUI_RPC_URL!,
+});
+
+const client = sui.$extend(
+walrus({
+uploadRelay: {
+// Testnet: https://upload-relay.testnet.walrus.space
+// Mainnet: https://upload-relay.mainnet.walrus.space
+host: process.env.WALRUS_UPLOAD_RELAY_HOST!,
+sendTip: { max: 1_000_000 }, // 0.001 SUI tip cap
+},
+storageNodeClientOptions: { timeout: 60_000 },
+}),
+);
+
+// Write a SEAL-encrypted blob (recommendation or trade settlement)
+const { blobId } = await client.walrus.writeBlob({
+blob: sealEncryptedBytes, // Uint8Array from seal.encrypt()
+deletable: false, // immutable — cannot be deleted by Lighthouse
+epochs: 53, // testnet: ~53 days. mainnet: ~2 years.
+signer: backendKeypair,
+});`} />
+
+<Callout variant="info">
+  Epoch length differs significantly between networks. On testnet, one epoch is
+  one day, so `epochs: 53` stores the blob for approximately 53 days. On
+  mainnet, one epoch is two weeks, so `epochs: 53` stores the blob for
+  approximately 742 days (just over two years). The same SDK call produces very
+  different real-world storage lifetimes depending on which network you are on.
+  For the Sui Overflow demo, testnet's 53-day window covers the entire judging
+  period and more.
+</Callout>
+
+<ProseH2 id="quilt-layout">Quilt Layout</ProseH2>
+
+Every Sunday at midnight UTC, Lighthouse generates a weekly report as a Walrus Quilt: a batched multi-file blob with deterministic flat identifiers. The Quilt contains four encrypted files and one plaintext tearsheet.
+
+<CodeBlock lang="typescript" code={`import { WalrusFile } from "@mysten/walrus";
+
+const files = [
+WalrusFile.from({
+contents: weekSummarySealed, // SEAL encrypted
+identifier: \`\${ownerAddr}-2026-W22-summary.json.seal\`,
+tags: { "content-type": "application/json+seal", slice: "pnl:summary" },
+}),
+WalrusFile.from({
+contents: weekDetailSealed, // SEAL encrypted
+identifier: \`\${ownerAddr}-2026-W22-detail.json.seal\`,
+tags: { "content-type": "application/json+seal", slice: "pnl:detail" },
+}),
+WalrusFile.from({
+contents: tradeLogSealed, // SEAL encrypted
+identifier: \`\${ownerAddr}-2026-W22-trades.ndjson.seal\`,
+tags: { "content-type": "application/x-ndjson+seal", slice: "audit" },
+}),
+WalrusFile.from({
+contents: transcriptsSealed, // SEAL encrypted
+identifier: \`\${ownerAddr}-2026-W22-transcripts.ndjson.seal\`,
+tags: { "content-type": "application/x-ndjson+seal", slice: "transcripts" },
+}),
+WalrusFile.from({
+contents: publicTearsheet, // PLAINTEXT — shareable
+identifier: \`\${ownerAddr}-2026-W22-tearsheet.json\`,
+tags: { "content-type": "application/json" },
+}),
+];
+
+const quiltResult = await client.walrus.writeFiles({
+files,
+epochs: 53,
+deletable: false,
+signer: backendKeypair,
+});`} />
+
+Quilt identifiers are flat strings, not paths. The slashes in the identifiers above are a Lighthouse naming convention. Readers must use the exact string to fetch a specific file. There is no directory listing.
+
+The public tearsheet is accessible at `https://lighthouse.wal.app/u/<suins>/<week>-tearsheet.json`. This resolves through SPA routing on the Walrus Site: the wal.app portal serves `index.html` for any `/u/*` path, and the React app fetches the tearsheet blob from the Walrus aggregator and renders it.
+
+<ProseH2 id="audit-anchor">Audit Anchor</ProseH2>
+
+Every blob write is paired with a Move transaction that records the blob ID on-chain in a `lighthouse::audit_anchor::AuditAnchor` object. This creates a cryptographically verifiable link between the off-chain Walrus blob and the on-chain Sui state.
+
+<CodeBlock lang="typescript" code={`import { Transaction } from "@mysten/sui/transactions";
+
+// After writeBlob returns a blobId and the trade tx is confirmed:
+const tx = new Transaction();
+tx.moveCall({
+target: \`\${LIGHTHOUSE_PACKAGE_ID}::audit_anchor::record\`,
+arguments: [
+tx.pure.u8(1), // kind: 1 = trade (0=recommendation, 2=weekly-report)
+tx.pure.vector("u8", Array.from(blobIdBytes)),
+tx.pure.vector("u8", Array.from(txDigestBytes)),
+tx.object("0x6"), // Clock
+],
+});
+const anchorResult = await suiClient.signAndExecuteTransaction({
+transaction: tx,
+signer: backendKeypair,
+options: { showObjectChanges: true },
+});`} />
+
+The `AuditAnchor` object is transferred to the user's address. It is a permanent on-chain record that anyone can read on Suiscan: blob ID, transaction digest, timestamp, and kind. The encrypted blob contents on Walrus are readable only to parties with SEAL decryption access.
+
+<ProseH2 id="cost-math">Cost Math</ProseH2>
+
+Walrus storage cost is calculated as:
+
+```
+register_blob WAL cost  = price_per_unit * encoded_size
+reserve_space WAL cost  = price_per_unit * encoded_size * epochs
+encoded_size           ~= max(5 * blob_bytes, MIN_BLOB_METADATA_UNITS)
+```
+
+For Lighthouse's typical blob sizes:
+
+- Per-recommendation blob: approximately 2 KB encrypted. Hits the metadata floor.
+- Per-trade settlement blob: approximately 3 KB encrypted. Hits the metadata floor.
+- Weekly Quilt: approximately 20 KB encrypted plus 5 KB plaintext tearsheet.
+
+At current testnet WAL pricing, a year of Lighthouse storage per active user costs under $0.50. The metadata floor dominates for anything under 10 MB. Run `walrus info` on your target network for live pricing before estimating costs.
+
+<Callout variant="warn">
+  Testnet WAL is free via `walrus get-wal`. The dollar estimates above apply to
+  mainnet only. For the v1 testnet demo, storage cost is zero. Do not use
+  testnet cost estimates to model mainnet economics.
+</Callout>

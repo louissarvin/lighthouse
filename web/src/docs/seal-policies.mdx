@@ -1,0 +1,217 @@
+---
+title: Owner, Copy-Trader, Audits
+description: How Lighthouse uses SEAL threshold IBE encryption to implement three tiers of memory access, and the critical caveats you must understand before granting access.
+section: SEAL Policies
+toc:
+  - id: seal-overview
+    text: SEAL Overview
+    level: 2
+  - id: identity-layout
+    text: Identity Layout
+    level: 2
+  - id: owner-access
+    text: Owner Access
+    level: 2
+  - id: copy-trader-grants
+    text: Copy-Trader Grants
+    level: 2
+  - id: audit-caps
+    text: Audit Caps
+    level: 2
+  - id: revocation
+    text: Revocation and Its Limits
+    level: 2
+  - id: version-1-lock
+    text: Version-1 Lock
+    level: 2
+---
+
+import { Callout } from '../components/docs/Callout'
+import { ProseH2 } from '../components/docs/ProseH2'
+import { CodeBlock } from '../components/docs/CodeBlock'
+
+<ProseH2 id="seal-overview">SEAL Overview</ProseH2>
+
+Every memory blob Lighthouse writes to Walrus is encrypted using SEAL (MystenLabs' threshold identity-based encryption library). The encryption key is not stored anywhere: it is mathematically derived from the user's Sui object identity and a set of independent key servers running a threshold-BLS protocol over BLS12-381. No single key server holds a complete key. A quorum of key servers must agree before a decryption key is released, and a Move transaction must succeed to prove the requester has permission.
+
+The Move policy lives in `lighthouse::trader_profile`. It exposes three `seal_approve` entry functions that SEAL key servers evaluate via dry-run:
+
+| Function                   | Caller          | Allowed slices      | Conditions                               |
+| -------------------------- | --------------- | ------------------- | ---------------------------------------- |
+| `seal_approve_owner`       | Owner           | All slices          | `sender == profile.owner`                |
+| `seal_approve_copy_trader` | Granted address | `risk-profile` only | In allowlist AND grant unexpired         |
+| `seal_approve_audit`       | AuditCap holder | All slices          | Cap ID in audit_grants AND cap unexpired |
+
+<ProseH2 id="identity-layout">Identity Layout</ProseH2>
+
+SEAL encrypts data under an "identity" byte string. Lighthouse uses raw bytes bound to a specific `TraderProfile` object:
+
+<CodeBlock lang="typescript" code={`import { fromHex, toHex } from "@mysten/bcs";
+
+// id_bytes = [profile_id_32_bytes][0x3a separator][slice_name_utf8]
+const profileIdBytes = fromHex(USER_TRADER_PROFILE_ID); // 32 bytes
+const sliceBytes = new TextEncoder().encode("trades"); // UTF-8
+const idBytes = new Uint8Array(profileIdBytes.length + 1 + sliceBytes.length);
+idBytes.set(profileIdBytes, 0);
+idBytes[profileIdBytes.length] = 0x3a; // ':' separator
+idBytes.set(sliceBytes, profileIdBytes.length + 1);
+const idHex = toHex(idBytes); // SDK takes hex string`} />
+
+The identity is bound to the specific `TraderProfile` object ID, not just the owner address. This prevents object substitution attacks: an attacker cannot deploy a separate `TraderProfile` with a matching `owner` field and use it to decrypt the victim's blobs. The `check_id_prefix` helper in the Move module enforces this binding.
+
+<ProseH2 id="owner-access">Owner Access</ProseH2>
+
+The owner can read any slice of their own profile. The `seal_approve_owner` entry function checks only that the transaction sender matches `profile.owner`.
+
+<CodeBlock lang="typescript" code={`import { SealClient, SessionKey } from "@mysten/seal";
+import { Transaction } from "@mysten/sui/transactions";
+
+// Create a SessionKey (one per Move package, TTL 10-30 minutes)
+const sessionKey = await SessionKey.create({
+address: ownerAddress,
+packageId: LIGHTHOUSE_PACKAGE_ID,
+ttlMin: 10,
+signer: ownerKeypair,
+suiClient: sui,
+});
+
+// Build the seal_approve PTB
+// Note: ctx: &TxContext is auto-injected by the Sui runtime. Do NOT include it.
+const tx = new Transaction();
+tx.moveCall({
+target: \`\${LIGHTHOUSE_PACKAGE_ID}::trader_profile::seal_approve_owner\`,
+arguments: [
+tx.pure.vector("u8", Array.from(idBytes)),
+tx.object(USER_TRADER_PROFILE_ID),
+],
+});
+const txBytes = await tx.build({ client: sui, onlyTransactionKind: true });
+
+// Decrypt
+const plaintext = await seal.decrypt({
+data: encryptedObject,
+sessionKey,
+txBytes,
+});`} />
+
+<ProseH2 id="copy-trader-grants">Copy-Trader Grants</ProseH2>
+
+A copy-trader grant gives a third-party Sui address time-bounded read access to the `risk-profile` slice only. No other slice is accessible. The grant is issued via the `trader_profile::grant_copy_trader` wrapper, which takes a `valid_until_ms` timestamp. Grants are stored in an `Allowlist` embedded in the `TraderProfile` object.
+
+<CodeBlock lang="typescript" code={`import { Transaction } from "@mysten/sui/transactions";
+
+// Grant 30-day access to a copy-trader
+const validUntilMs = Date.now() + 30 \* 86_400_000;
+
+const tx = new Transaction();
+tx.moveCall({
+target: \`\${LIGHTHOUSE_PACKAGE_ID}::trader_profile::grant_copy_trader\`,
+arguments: [
+tx.object(USER_TRADER_PROFILE_ID),
+tx.pure.address(COPY_TRADER_ADDR),
+tx.pure.u64(BigInt(validUntilMs)),
+],
+});
+await sui.signAndExecuteTransaction({ transaction: tx, signer: ownerKeypair });`} />
+
+The copy-trader can now decrypt the `risk-profile` slice. The `seal_approve_copy_trader` function checks that the caller is in the allowlist and that the current timestamp is before `valid_until_ms`. Any other slice returns an abort; the key server releases no key.
+
+<Callout variant="danger">
+  Past decryption is not retractable. Once a copy-trader successfully calls
+  `fetchKeys` during their grant window, they hold the derived decryption key
+  permanently in memory or storage. Revoking the grant via `revoke_copy_trader`
+  only blocks future key requests from the SEAL key servers. It does not
+  cryptographically invalidate the key the copy-trader already obtained. Treat
+  any slice shared with a copy-trader as permanently disclosed to that party
+  after a successful decryption has occurred. If you need true revocation, you
+  must rotate the slice: encrypt new data under a new identity and stop writing
+  to the old one. The recommended approach is to append a version suffix to the
+  namespace (for example `lighthouse:risk-profile-v2`) on revocation so future
+  data is under a different identity that the revoked party cannot access.
+</Callout>
+
+<ProseH2 id="audit-caps">Audit Caps</ProseH2>
+
+An `AuditCap` is an NFT that grants the holder full read access to all slices of a specific `TraderProfile` until the cap expires. The owner mints the cap and transfers it to the auditor's address. The cap ID is recorded in `profile.audit_grants`.
+
+<CodeBlock lang="typescript" code={`import { Transaction } from "@mysten/sui/transactions";
+
+// Mint an AuditCap valid for 1 hour
+const validUntilMs = Date.now() + 3_600_000;
+
+const tx = new Transaction();
+tx.moveCall({
+target: \`\${LIGHTHOUSE_PACKAGE_ID}::trader_profile::grant_audit\`,
+arguments: [
+tx.object(USER_TRADER_PROFILE_ID),
+tx.pure.address(AUDITOR_ADDR),
+tx.pure.u64(BigInt(validUntilMs)),
+],
+});
+await sui.signAndExecuteTransaction({ transaction: tx, signer: ownerKeypair });`} />
+
+The auditor builds a `seal_approve_audit` PTB that includes the `AuditCap` object. The Move function checks that the cap ID is in `profile.audit_grants` and that the current timestamp is before the cap's `valid_until_ms`.
+
+<Callout variant="danger">
+  AuditCap blast radius is equivalent to owner access. The cap permits
+  decryption of any slice: trade history, transcripts, lessons learned, goals.
+  If the cap leaks or the auditor is compromised, every encrypted Lighthouse
+  blob is exposed for the duration of the cap's validity window. Mitigation: cap
+  `valid_until_ms` at 1 hour by default and re-mint per audit session. Do not
+  issue long-lived audit caps. Combine with the past-decryption caveat above:
+  once the auditor decrypts a blob, revoking the cap cannot erase what they
+  already have.
+</Callout>
+
+<ProseH2 id="revocation">Revocation and Its Limits</ProseH2>
+
+Revoking copy-trader access requires a single Move transaction:
+
+<CodeBlock
+  lang="typescript"
+  code={`const tx = new Transaction();
+tx.moveCall({
+  target: \`\${LIGHTHOUSE_PACKAGE_ID}::trader_profile::revoke_copy_trader\`,
+  arguments: [
+    tx.object(USER_TRADER_PROFILE_ID),
+    tx.pure.address(COPY_TRADER_ADDR),
+  ],
+});
+await sui.signAndExecuteTransaction({ transaction: tx, signer: ownerKeypair });`}
+/>
+
+After this transaction confirms, the copy-trader's address is removed from the allowlist. Any subsequent `seal_approve_copy_trader` call from that address will abort, and the key servers will release no key for future decrypt requests.
+
+Revoking an AuditCap removes it from `profile.audit_grants`:
+
+<CodeBlock
+  lang="typescript"
+  code={`const tx = new Transaction();
+tx.moveCall({
+  target: \`\${LIGHTHOUSE_PACKAGE_ID}::trader_profile::revoke_audit\`,
+  arguments: [
+    tx.object(USER_TRADER_PROFILE_ID),
+    tx.pure.id(AUDIT_CAP_OBJECT_ID),
+  ],
+});
+await sui.signAndExecuteTransaction({ transaction: tx, signer: ownerKeypair });`}
+/>
+
+Both revocation paths block future key requests immediately after the transaction confirms. Neither path affects data that was already decrypted before revocation.
+
+<ProseH2 id="version-1-lock">Version-1 Lock</ProseH2>
+
+<Callout variant="warn">
+  SEAL's `SessionKey.create` reads the Lighthouse package's on-chain object
+  version field (the integer that increments each time you run `sui client
+  upgrade`) and asserts it equals `'1'`. If you upgrade the Lighthouse Move
+  package post-launch, every active `SessionKey` breaks immediately. Encrypted
+  blobs from before the upgrade can no longer be decrypted by clients holding a
+  `SessionKey` for the new package version. The mitigation is to republish
+  Lighthouse as a new package and migrate all encrypted blobs. This is a
+  significant operational cost. Keep the Lighthouse Move surface minimal in v1
+  to defer upgrade pressure. This version-1 restriction is a current SEAL SDK
+  limitation; Mysten is aware of it and may relax it in a future release.
+</Callout>
+
+This constraint is independent of any in-Move `version: u64` field you might add for data migration purposes. The SEAL check operates on the package's on-chain object version, not on any application-level version stored inside the Move module's state.
