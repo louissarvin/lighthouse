@@ -1,0 +1,9 @@
+build/*
+traces/*
+.trace
+.coverage*
+
+# Local agent state (do not commit)
+.claude/
+
+# NOTE: Move.lock IS committed (pins dep revisions for reproducible builds).
