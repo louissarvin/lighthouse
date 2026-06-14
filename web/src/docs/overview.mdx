@@ -1,0 +1,71 @@
+---
+title: Overview
+description: What Lighthouse is, the four capabilities it ships, and the Sui-native primitives that make AI trading verifiable.
+section: Getting Started
+toc:
+  - id: what-lighthouse-is
+    text: What Lighthouse Is
+    level: 2
+  - id: four-capabilities
+    text: Four Capabilities
+    level: 2
+  - id: architecture-layers
+    text: Architecture Layers
+    level: 2
+  - id: key-integrations
+    text: Key Integrations
+    level: 2
+  - id: network-and-demo
+    text: Network and Live Demo
+    level: 2
+---
+
+import { Callout } from '../components/docs/Callout'
+import { ProseH2 } from '../components/docs/ProseH2'
+
+<ProseH2 id="what-lighthouse-is">What Lighthouse Is</ProseH2>
+
+Lighthouse is an AI trading coach with verifiable memory on Sui and Walrus. Every coaching decision, every trade, and every revocation is anchored on chain in the same atomic PTB as the action it audits. There is no off-chain log to trust.
+
+The coach remembers you across sessions, devices, and chains. It recommends trades grounded in your prior context. It executes on DeepBook v3 inside a budget the Move contract enforces. And it proves every step.
+
+<ProseH2 id="four-capabilities">Four Capabilities</ProseH2>
+
+**Remember.** Seven semantic MemWal namespaces per user, each backed by a SEAL-encrypted Walrus blob. Risk profile, trades, lessons, goals, holdings, personality, preferences. Vector recall happens in parallel across namespaces; top-K results are SEAL-decrypted on the fly with the user's threshold key shares.
+
+**Recommend.** Atoma decentralized inference running Llama 3.3 70B. The coach pulls relevant memory, calls the model, and returns a sized recommendation. The prompt, the model identifier, and the rationale are written to Walrus together so the reasoning is reproducible.
+
+**Execute.** A capability-scoped `ExecutorAgent` places DeepBook v3 spot orders through the `executor::place_limit_under_budget` Move function. Per-trade cap, per-day cap, whitelisted pools, and expiry are asserted on chain. The backend cannot bypass these guards; the chain rejects any transaction that violates them.
+
+**Prove.** Every state-changing flow bundles `audit_anchor::record` into the same PTB as the action. Memory writes, trades, revocations, and weekly tearsheets all land with an on-chain receipt pointing at the SEAL-encrypted Walrus blob.
+
+<ProseH2 id="architecture-layers">Architecture Layers</ProseH2>
+
+Lighthouse composes five Sui-native primitives. Remove any one and the product breaks.
+
+- **Walrus.** Erasure-coded blob storage. Every coaching decision and trade outcome is a Walrus blob certified on chain.
+- **SEAL.** Threshold identity-based encryption. Keys derive from the user's Sui object identity and a quorum of independent key servers. Three access tiers: owner (full), copy-trader (time-bounded grant to the `risk-profile` namespace), auditor (temporary `AuditCap`).
+- **MemWal.** Seven semantic vector namespaces: `lighthouse:risk-profile`, `lighthouse:trades`, `lighthouse:lessons`, `lighthouse:goals`, `lighthouse:holdings`, `lighthouse:personality`, `lighthouse:preferences`. Each is a vector store on top of Walrus.
+- **Move smart contracts.** Five modules on Sui testnet: `version`, `allowlist`, `audit_anchor`, `trader_profile`, `executor`. Every entry function asserts `version::check_is_valid` so the package ships with a kill switch.
+- **Atoma.** Decentralized inference for the coach. Llama 3.3 70B via the Atoma SDK.
+
+<ProseH2 id="key-integrations">Key Integrations</ProseH2>
+
+- **zkLogin + Enoki.** Sign in with Google. No seed phrase, no extension wallet. Enoki sponsors gas so users need zero SUI to start.
+- **DeepBook v3.** Spot orderbook execution through `BalanceManager` and `TradeCap`. The `ExecutorAgent` only ever holds the cap, never user funds.
+- **DeepBook Predict.** Binary expiry prediction markets sit alongside the spot leg for optional hedge flows.
+- **SuiNS.** `.sui` name resolution drives tearsheet routing and Walrus Site association.
+- **Sui Stack Messaging.** SEAL-encrypted group messages with Walrus archival, for coach-to-user delivery beyond Telegram.
+
+<ProseH2 id="network-and-demo">Network and Live Demo</ProseH2>
+
+Lighthouse v1 runs on Sui testnet so the DeepBook v3 spot leg and the DeepBook Predict hedge leg share a network.
+
+- Telegram bot: [@LighthouseCoachBot](https://t.me/LighthouseCoachBot)
+- Web app: [https://lighthouse.wal.app](https://lighthouse.wal.app)
+
+<Callout variant="info">
+  Every state-changing user action travels in a single PTB: the on-chain effect
+  and its audit anchor commit together or not at all. The audit trail cannot
+  drift from the action it audits.
+</Callout>
