@@ -151,3 +151,25 @@ export const handleDatabaseError = (
 export const handleServerError = (reply: FastifyReply, originalError: Error): Promise<FastifyReply> => {
   return handleError(reply, 500, 'Internal server error', 'INTERNAL_ERROR', originalError);
 };
+
+/**
+ * Handle rate limit errors (429)
+ */
+export const handleRateLimitError = (
+  reply: FastifyReply,
+  reason: string = 'Too many requests',
+): Promise<FastifyReply> => {
+  return handleError(reply, 429, reason, 'RATE_LIMIT_EXCEEDED');
+};
+
+/**
+ * Handle conflict errors (409) — e.g. duplicate resource creation.
+ */
+export const handleConflictError = (
+  reply: FastifyReply,
+  resource: string,
+  reason?: string,
+): Promise<FastifyReply> => {
+  const msg = reason ? `${resource}: ${reason}` : `${resource} already exists`;
+  return handleError(reply, 409, msg, 'CONFLICT', null, { resource, reason });
+};
