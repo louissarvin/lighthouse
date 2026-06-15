@@ -37,3 +37,12 @@ export const suiRpc = new SuiJsonRpcClient({
 export async function getLatestCheckpoint(): Promise<string> {
   return await suiRpc.getLatestCheckpointSequenceNumber();
 }
+
+/**
+ * Shorten a Sui address for logging (keeps first 6 + last 4 chars).
+ * Avoids importing miscUtils in hot paths.
+ */
+export function shortAddr(addr: string): string {
+  if (!addr || addr.length < 12) return addr;
+  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+}
