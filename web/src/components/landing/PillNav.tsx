@@ -12,6 +12,7 @@ gsap.registerPlugin(useGSAP)
 
 const NAV_LINKS = [
   { label: 'Protocol', to: '/protocol' as const, exact: true },
+  { label: 'Leaderboard', to: '/leaderboard' as const, exact: true },
   { label: 'Docs', to: '/docs' as const, exact: false },
 ] as const
 
