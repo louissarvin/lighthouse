@@ -1,4 +1,4 @@
-import { createContext, useCallback, useMemo } from 'react'
+import { createContext, useCallback, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import type { ProfileMe } from '@/lib/types'
@@ -17,6 +17,11 @@ export interface AuthContextValue {
   /** Invalidates the profile cache and returns the freshly fetched value. */
   refresh: () => Promise<ProfileMe | null>
   signOut: () => Promise<void>
+  /**
+   * True only while sign-out is in flight.
+   * Use to show a loading spinner on the sign-out button.
+   */
+  isSigningOut: boolean
 }
 
 export const AuthContext = createContext<AuthContextValue | null>(null)
@@ -61,16 +66,21 @@ export function AuthProvider({ children, enokiAddress = null }: AuthProviderProp
     )
   }
 
+  const [isSigningOut, setIsSigningOut] = useState(false)
+
   const refresh = useCallback(async (): Promise<ProfileMe | null> => {
     await qc.invalidateQueries({ queryKey: QUERY_KEY })
     return qc.getQueryData<ProfileMe | null>(QUERY_KEY) ?? null
   }, [qc])
 
   const signOut = useCallback(async () => {
+    setIsSigningOut(true)
     try {
       await apiFetch('/auth/web/logout', { method: 'POST', body: {} })
     } catch {
       // tolerate — cookie may already be missing
+    } finally {
+      setIsSigningOut(false)
     }
     qc.setQueryData(QUERY_KEY, null)
     await qc.invalidateQueries({ queryKey: QUERY_KEY })
@@ -84,8 +94,9 @@ export function AuthProvider({ children, enokiAddress = null }: AuthProviderProp
       enokiAddress,
       refresh,
       signOut,
+      isSigningOut,
     }),
-    [data, isLoading, enokiAddress, refresh, signOut],
+    [data, isLoading, enokiAddress, refresh, signOut, isSigningOut],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
