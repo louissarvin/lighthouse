@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 export function useLocalStorage<T>(
   key: string,
   initialValue: T,
-): [T, (value: T | ((prev: T) => T)) => void] {
+): [T, (value: T | ((prev: T) => T)) => void, () => void] {
   const [storedValue, setStoredValue] = useState<T>(initialValue)
   const [isHydrated, setIsHydrated] = useState(false)
 
@@ -35,5 +35,16 @@ export function useLocalStorage<T>(
     [key, storedValue],
   )
 
-  return [isHydrated ? storedValue : initialValue, setValue]
+  const removeValue = useCallback(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.removeItem(key)
+      }
+      setStoredValue(initialValue)
+    } catch (error) {
+      console.warn(`Error removing localStorage key "${key}":`, error)
+    }
+  }, [key, initialValue])
+
+  return [isHydrated ? storedValue : initialValue, setValue, removeValue]
 }
