@@ -245,6 +245,13 @@ export const EVENT_INDEXER_RECONNECT_MS: number =
 export const ERROR_LOG_MAX_RECORDS: number = 10000;
 export const ERROR_LOG_CLEANUP_INTERVAL: string = '0 * * * *';
 
+// === Network timeouts ===
+
+/// Default AbortSignal timeout (ms) for all outbound Sui RPC / HTTP calls.
+/// Workers and services should use this instead of hardcoding 5000.
+export const REQUEST_TIMEOUT_MS: number =
+  Number(process.env.REQUEST_TIMEOUT_MS) || 5000;
+
 // === Default export ===
 
 export default {
