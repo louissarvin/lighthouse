@@ -225,3 +225,21 @@ export async function* sseStream(
     }
   }
 }
+
+// Convenience wrappers for the most common request patterns.
+
+export const apiGet = <T = unknown>(
+  path: string,
+  opts?: Omit<ApiFetchOptions, 'method'>,
+): Promise<T> => apiFetch<T>(path, { ...opts, method: 'GET' })
+
+export const apiPost = <T = unknown>(
+  path: string,
+  body?: unknown,
+  opts?: Omit<ApiFetchOptions, 'method' | 'body'>,
+): Promise<T> => apiFetch<T>(path, { ...opts, method: 'POST', body })
+
+export const apiDelete = <T = unknown>(
+  path: string,
+  opts?: Omit<ApiFetchOptions, 'method'>,
+): Promise<T> => apiFetch<T>(path, { ...opts, method: 'DELETE' })
