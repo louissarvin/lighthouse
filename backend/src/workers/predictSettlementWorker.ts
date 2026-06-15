@@ -14,8 +14,8 @@
  *     position (would otherwise double-notify the user).
  *   - We only ever flip status `open` → `settled` here; the user has to opt-in
  *     to the redeem PTB to actually move funds. No silent on-chain writes.
- *   - All RPC reads have a 5s AbortSignal — a hung Sui RPC won't deadlock the
- *     cron tick.
+ *   - All RPC reads use REQUEST_TIMEOUT_MS AbortSignal — a hung Sui RPC won't
+ *     deadlock the cron tick. Timeout is configurable via env var.
  *   - We persist `settled_at` before sending the Telegram message so that even
  *     if the bot send fails (network blip / bot disabled), we won't re-notify
  *     on the next tick. The OAuth claim link is short-lived (5 min) but the
@@ -24,7 +24,7 @@
 
 import cron from 'node-cron';
 
-import { SUI_RPC_URL } from '../config/main-config.ts';
+import { REQUEST_TIMEOUT_MS, SUI_RPC_URL } from '../config/main-config.ts';
 import { prismaQuery } from '../lib/prisma.ts';
 import { getTelegramBot } from '../lib/telegramBot.ts';
 import { buildTelegramOAuthFlow } from '../lib/zklogin.ts';
@@ -73,7 +73,7 @@ async function checkSettledPositions(): Promise<void> {
             method: 'sui_getObject',
             params: [pos.oracle_id, { showContent: true, showOwner: true }],
           }),
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
         if (!resp.ok) continue;
         const data = (await resp.json()) as OracleObjectResponse;
@@ -115,7 +115,7 @@ async function checkSettledPositions(): Promise<void> {
                 method: 'sui_getTransactionBlock',
                 params: [pos.tx_digest, { showEffects: true }],
               }),
-              signal: AbortSignal.timeout(5000),
+              signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
             });
             if (txCheckResp.ok) {
               const txData = (await txCheckResp.json()) as {
