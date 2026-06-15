@@ -77,7 +77,11 @@ export async function bindTelegramToSuiAddress(args: BindArgs): Promise<BindResu
   const profile = await prismaQuery.traderProfile.create({
     data: {
       sui_address: args.suiAddress,
-      profile_object_id: args.profileObjectId ?? '',
+      // null until the on-chain trader_profile::create PTB is signed and
+      // recordProfileObjectId() backfills it. Empty string was previously
+      // used as a sentinel but collides with the @unique constraint on the
+      // second new user.
+      profile_object_id: args.profileObjectId ?? null,
       coach_group_uuid: coachUuid,
       audit_group_uuid: auditUuid,
       telegram: {
