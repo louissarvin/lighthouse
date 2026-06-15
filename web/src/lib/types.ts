@@ -216,6 +216,43 @@ export interface CoachRecommendResponse {
 }
 
 // ────────────────────────────────────────────────────────────────────────
+// Predict positions
+// ────────────────────────────────────────────────────────────────────────
+
+export type HedgePositionStatus = 'open' | 'settled' | 'lost' | 'redeemed'
+
+export interface HedgePosition {
+  id: string
+  oracle_id: string
+  predict_id: string | null
+  is_up: boolean
+  strike: string
+  quantity: string
+  expiry_ms: string | null
+  tx_digest: string | null
+  status: HedgePositionStatus
+  settled_at: string | null
+  created_at: string
+}
+
+export interface PredictPositionsResponse {
+  positions: Array<HedgePosition>
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Balance
+// ────────────────────────────────────────────────────────────────────────
+
+export interface PredictBalanceResponse {
+  dusdc: string
+  sui: string
+  raw: {
+    predictManager: { dusdc: string } | null
+    suiGas: string
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────
 // MemWal namespaces + recall
 // ────────────────────────────────────────────────────────────────────────
 
