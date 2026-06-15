@@ -187,3 +187,42 @@ export function unsluggify(slug: string, separator: string = '-'): string {
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join(' ')
 }
+
+/**
+ * Format a DUSDC amount (6 decimals, stored as integer) for display.
+ * e.g. 10_000_000 → "10.00 DUSDC"
+ */
+export const formatDusdc = (
+  amount: number | string | bigint,
+  decimals = 2,
+  showSymbol = true,
+): string => {
+  const n = typeof amount === 'bigint' ? Number(amount) : Number(amount)
+  const formatted = (n / 1_000_000).toFixed(decimals)
+  return showSymbol ? `${formatted} DUSDC` : formatted
+}
+
+/**
+ * Format a USD price with 9-decimal fixed-point precision.
+ * e.g. 65_000_000_000_000 → "$65,000.00"
+ */
+export const formatUsdPrice = (
+  price: number | string | bigint,
+  decimals = 2,
+): string => {
+  const n = typeof price === 'bigint' ? Number(price) : Number(price)
+  const usd = n / 1e9
+  return `$${usd.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`
+}
+
+/**
+ * Truncate a Sui address for display: 0x1234...abcd
+ */
+export const formatSuiAddress = (
+  addr: string,
+  startChars = 6,
+  endChars = 4,
+): string => {
+  if (!addr || addr.length <= startChars + endChars + 3) return addr
+  return `${addr.slice(0, startChars)}...${addr.slice(-endChars)}`
+}
