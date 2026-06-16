@@ -101,3 +101,33 @@ export const authMiddleware = async (
 
   return handleError(reply, 401, 'Unsupported JWT kind', 'BAD_JWT_KIND');
 };
+
+/**
+ * Optional auth middleware: like authMiddleware but does NOT fail the request
+ * when no token is present. Sets `request.user` when authenticated, leaves it
+ * undefined otherwise. Use on public-but-context-aware routes (e.g. /profile/:id).
+ */
+export const optionalAuthMiddleware = async (
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> => {
+  const authHeader = request.headers.authorization;
+  const cookies = (request as FastifyRequest & { cookies?: Record<string, string> }).cookies;
+  const cookieToken = cookies ? cookies[WEB_COOKIE_NAME] : undefined;
+
+  let token: string | undefined;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.split(' ')[1];
+  } else if (cookieToken) {
+    token = cookieToken;
+  }
+
+  if (!token) return; // unauthenticated — not an error
+
+  try {
+    // Reuse the full middleware; ignore any reply errors (they signal 401).
+    await authMiddleware(request, reply);
+  } catch {
+    // Invalid token on an optional route is tolerated silently.
+  }
+};
