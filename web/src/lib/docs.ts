@@ -95,3 +95,26 @@ export const DOCS_NAV_TREE = [
     items: [{ slug: 'audits', label: 'Contract Status' }],
   },
 ] as const
+
+/**
+ * Flat list of all doc slugs in nav order. Useful for prev/next navigation.
+ */
+export const DOCS_ORDERED_SLUGS: Array<string> = DOCS_NAV_TREE.flatMap((section) =>
+  section.items.map((item) => item.slug),
+)
+
+/**
+ * Get the previous and next docs for prev/next navigation links.
+ */
+export function getDocNeighbors(slug: string): {
+  prev: Doc | null
+  next: Doc | null
+} {
+  const idx = DOCS_ORDERED_SLUGS.indexOf(slug)
+  const prevSlug = idx > 0 ? DOCS_ORDERED_SLUGS[idx - 1] : null
+  const nextSlug = idx < DOCS_ORDERED_SLUGS.length - 1 ? DOCS_ORDERED_SLUGS[idx + 1] : null
+  return {
+    prev: prevSlug ? getDocBySlug(prevSlug) : null,
+    next: nextSlug ? getDocBySlug(nextSlug) : null,
+  }
+}
