@@ -151,3 +151,19 @@ export async function readWeeklyQuilt(
   ]);
   return { summaryCiphertext, detailCiphertext, tearsheetPlaintext };
 }
+
+/**
+ * Compute the public Walrus aggregator URL for a blob.
+ * Useful for providing shareable links to tearsheets.
+ */
+export function blobUrl(blobId: string): string {
+  return `${WALRUS_AGGREGATOR_URL}/v1/blobs/${blobId}`;
+}
+
+/**
+ * Compute the Walrus SuiNS site URL for a blob.
+ * Lighthouse public tearsheets are served from lighthouse.wal.app.
+ */
+export function quiltFileUrl(quiltId: string, identifier: string): string {
+  return `${WALRUS_AGGREGATOR_URL}/v1/blobs/by-quilt-id/${quiltId}/${encodeURIComponent(identifier)}`;
+}
