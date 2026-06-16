@@ -19,7 +19,11 @@ export default function LenisSmoothScrollProvider() {
       '(prefers-reduced-motion: reduce)',
     ).matches
 
-    if (prefersReduced) return
+    // Also disable on low-end devices (navigator.hardwareConcurrency < 4) to
+    // prevent jank on CPU-bound machines. Falls back to native scroll.
+    const isLowEnd = typeof navigator.hardwareConcurrency === 'number' && navigator.hardwareConcurrency < 4
+
+    if (prefersReduced || isLowEnd) return
 
     const lenis = new Lenis({
       lerp: 0.1,
