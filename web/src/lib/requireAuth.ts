@@ -90,3 +90,24 @@ export async function requireRiskSetup(args: {
   }
   return result
 }
+
+/**
+ * Like `requireAuth`, but also checks that the user's trading setup is
+ * complete (BalanceManager + ExecutorAgent created). If not, redirects to
+ * `/setup` with `?tab=trading`.
+ *
+ * Use on /trade and any route that exercises DeepBook flows.
+ */
+export async function requireTradingSetup(args: {
+  context: RouterContext
+  location: RouterLocation
+}): Promise<{ profile: ProfileMe }> {
+  const result = await requireRiskSetup(args)
+  if (!result.profile.balanceManagerId || !result.profile.executorAgentId) {
+    throw redirect({
+      to: '/setup',
+      search: { tab: 'trading', next: args.location.pathname } as never,
+    })
+  }
+  return result
+}
