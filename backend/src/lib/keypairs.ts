@@ -259,3 +259,24 @@ export function getExecutorAddress(): string {
 export function getKeeperAddress(): string {
   return getSettlementKeeperKeypair().getPublicKey().toSuiAddress();
 }
+
+/**
+ * Returns a diagnostic summary of all configured keypairs.
+ * Useful for the /health endpoint and boot-time logging.
+ * Catches load errors so a misconfigured optional keypair does not crash
+ * the health check.
+ */
+export function getKeypairAddresses(): {
+  coach: string | null
+  executor: string | null
+  keeper: string | null
+} {
+  const safe = (fn: () => string): string | null => {
+    try { return fn() } catch { return null }
+  }
+  return {
+    coach: safe(getCoachAddress),
+    executor: safe(getExecutorAddress),
+    keeper: safe(getKeeperAddress),
+  }
+}
