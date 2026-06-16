@@ -34,3 +34,31 @@ export const validateRequiredFields = async (
 
   return true;
 };
+
+/**
+ * Validate that a string looks like a valid Sui address (0x + 64 hex chars).
+ */
+export function isValidSuiAddress(addr: unknown): addr is string {
+  return typeof addr === 'string' && /^0x[0-9a-f]{64}$/i.test(addr);
+}
+
+/**
+ * Validate a positive integer (e.g. quantity in DUSDC units).
+ * Returns true for any `number | bigint | string` that is a positive integer.
+ */
+export function isPositiveInteger(val: unknown): boolean {
+  if (typeof val === 'number') return Number.isInteger(val) && val > 0;
+  if (typeof val === 'bigint') return val > 0n;
+  if (typeof val === 'string') {
+    const n = Number(val);
+    return Number.isFinite(n) && Number.isInteger(n) && n > 0;
+  }
+  return false;
+}
+
+/**
+ * Validate that a value is a non-empty string.
+ */
+export function isNonEmptyString(val: unknown): val is string {
+  return typeof val === 'string' && val.trim().length > 0;
+}
