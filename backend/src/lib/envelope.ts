@@ -108,3 +108,17 @@ export async function loadDelegateKey(
     );
   }
 }
+
+/**
+ * Rotate an encrypted value to a new `profileId` binding (e.g. after a
+ * profile merge). Decrypts with the old ID, re-encrypts with the new one.
+ * Returns the new ciphertext.
+ */
+export function envelopeRotate(
+  oldProfileId: string,
+  newProfileId: string,
+  stored: string,
+): string {
+  const plaintext = envelopeDecrypt(oldProfileId, stored);
+  return envelopeEncrypt(newProfileId, plaintext);
+}
