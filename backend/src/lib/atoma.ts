@@ -293,3 +293,35 @@ function hashRequest(messages: ChatMessage[]): string {
   }
   return h.digest('hex');
 }
+
+/**
+ * Count tokens in a message array (rough estimate: ~4 chars per token).
+ * Use before API calls to guard against context window overflows.
+ * This is NOT tiktoken — it's a fast heuristic for budget checks.
+ */
+export function estimateTokenCount(messages: ChatMessage[]): number {
+  const totalChars = messages.reduce((sum, m) => sum + m.role.length + m.content.length + 5, 0);
+  return Math.ceil(totalChars / 4);
+}
+
+/**
+ * Truncate messages to stay within a token budget.
+ * Keeps the system message (first) + most recent messages.
+ */
+export function truncateMessages(
+  messages: ChatMessage[],
+  maxTokens = 6_000,
+): ChatMessage[] {
+  if (estimateTokenCount(messages) <= maxTokens) return messages;
+  const system = messages[0]?.role === 'system' ? [messages[0]] : [];
+  const rest = messages.slice(system.length)
+  const out: ChatMessage[] = [];
+  let budget = maxTokens - estimateTokenCount(system);
+  for (let i = rest.length - 1; i >= 0 && budget > 0; i--) {
+    const tokens = Math.ceil((rest[i]!.role.length + rest[i]!.content.length + 5) / 4);
+    if (tokens > budget) break;
+    out.unshift(rest[i]!);
+    budget -= tokens;
+  }
+  return [...system, ...out];
+}
