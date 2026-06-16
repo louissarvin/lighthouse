@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 
 type Theme = 'light' | 'dark'
+export type { Theme }
 
 interface ThemeContextValue {
   theme: Theme
@@ -10,14 +11,19 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null)
 
+const THEME_STORAGE_KEY = 'lh:theme'
+const THEMES: Theme[] = ['light', 'dark']
+
 function getStoredTheme(): Theme {
   if (typeof window === 'undefined') return 'dark'
   try {
-    const stored = localStorage.getItem('theme')
+    const stored = localStorage.getItem(THEME_STORAGE_KEY)
     if (stored) {
-      const parsed = JSON.parse(stored)
+      const parsed = JSON.parse(stored) as unknown
       if (parsed === 'light' || parsed === 'dark') return parsed
     }
+    // Fall back to system preference when no stored value.
+    if (window.matchMedia('(prefers-color-scheme: light)').matches) return 'light'
   } catch {}
   return 'dark'
 }
@@ -42,7 +48,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     setThemeState(newTheme)
     applyTheme(newTheme)
     try {
-      localStorage.setItem('theme', JSON.stringify(newTheme))
+      localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify(newTheme))
     } catch {}
   }
 
