@@ -21,6 +21,17 @@ function is404(error?: Error): boolean {
   )
 }
 
+function isNetworkError(error?: Error): boolean {
+  if (!error) return false
+  const msg = error.message.toLowerCase()
+  return (
+    msg.includes('network') ||
+    msg.includes('fetch') ||
+    msg.includes('failed to load') ||
+    error.name === 'TypeError'
+  )
+}
+
 export default function ErrorPage({ error, reset }: ErrorPageProps) {
   const router = useRouter()
 
@@ -84,6 +95,31 @@ export default function ErrorPage({ error, reset }: ErrorPageProps) {
           </motion.div>
         </main>
 
+        <FooterCard />
+      </div>
+    )
+  }
+
+  // Network error path
+  if (isNetworkError(error)) {
+    return (
+      <div className="min-h-screen bg-lh-bg flex flex-col">
+        <PillNav />
+        <main className="flex-1 flex items-center justify-center min-h-[60vh] px-4 sm:px-6">
+          <div className="w-full max-w-[540px]">
+            <EyebrowTag dot className="mb-4">NETWORK ERROR</EyebrowTag>
+            <h1 className={cnm('font-bold tracking-[-1px] text-lh-text leading-tight', 'text-[32px] sm:text-[48px]', 'mb-4')}>
+              Connection lost.
+            </h1>
+            <p className="text-[16px] text-lh-text-dim leading-relaxed mb-8">
+              Lighthouse could not reach the backend. Check your internet connection and try again.
+            </p>
+            <button onClick={() => window.location.reload()} className="inline-flex items-center gap-2 px-6 py-3 rounded-full text-sm font-semibold bg-lh-accent text-lh-bg hover:bg-lh-accent-warm transition-colors duration-150">
+              <RefreshCw size={14} strokeWidth={1.5} aria-hidden="true" />
+              Retry
+            </button>
+          </div>
+        </main>
         <FooterCard />
       </div>
     )
