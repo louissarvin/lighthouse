@@ -175,3 +175,19 @@ export class CoachOutputError extends Error {
 
 /// Used elsewhere to surface validation errors uniformly.
 export { z };
+
+/**
+ * Estimate if the recalled memories + user prompt would exceed a reasonable
+ * token budget before calling Atoma. Returns true if safe to proceed.
+ * This is a heuristic — Atoma will error explicitly if we exceed the limit.
+ */
+export function isWithinTokenBudget(
+  recalled: { text: string }[],
+  userPrompt: string,
+  maxTokens = 6_000,
+): boolean {
+  const systemChars = COACH_SYSTEM_PROMPT.length + userPrompt.length;
+  const memoryChars = recalled.reduce((sum, m) => sum + m.text.length, 0);
+  const estimatedTokens = Math.ceil((systemChars + memoryChars) / 4);
+  return estimatedTokens <= maxTokens;
+}
