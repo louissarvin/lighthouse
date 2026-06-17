@@ -191,3 +191,14 @@ function shortenHex(s: string): string {
 function formatBig(n: bigint): string {
   return n.toString();
 }
+
+/**
+ * Summarise a GuardianResult as a compact single-line string for logging.
+ * Example: "PASS [✓✓✓✓✗] slippage 1.23%"
+ */
+export function guardianLogLine(result: GuardianResult): string {
+  const icons = result.checks.map((c) => (c.pass ? '✓' : '✗')).join('')
+  const firstFail = result.checks.find((c) => !c.pass)
+  const detail = firstFail ? ` — ${firstFail.message}` : ''
+  return `${result.overall_pass ? 'PASS' : 'FAIL'} [${icons}]${detail}`
+}
