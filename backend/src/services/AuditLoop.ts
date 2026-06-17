@@ -204,3 +204,17 @@ function base58ToBytes32(input: string): Uint8Array {
 }
 
 export type { RecallEntry };
+
+/**
+ * Human-readable summary of an archiveBlob result for logging/monitoring.
+ * e.g. "[auditLoop] archived: blobId=abc123 anchor=Def456 memwal=Ghi789"
+ */
+export function archiveResultLog(result: ArchiveBlobResult): string {
+  const short = (s: string) => s.slice(0, 10) + '…';
+  const parts = [
+    `blobId=${short(result.walrusBlobId)}`,
+    `anchor=${short(result.auditAnchorTxDigest)}`,
+  ];
+  if (result.memwalBlobId) parts.push(`memwal=${short(result.memwalBlobId)}`);
+  return `[auditLoop] archived: ${parts.join(' ')}`;
+}
