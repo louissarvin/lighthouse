@@ -133,5 +133,37 @@ export const notificationRoutes: FastifyPluginCallback = (
     },
   );
 
+  // DELETE /notifications/:id — soft-delete a single notification.
+  app.delete(
+    '/:id',
+    {
+      preHandler: [authMiddleware],
+      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const user = request.user;
+      if (!user?.trader_profile_id) {
+        return handleError(reply, 401, 'no profile bound', 'NO_PROFILE');
+      }
+      const { id } = request.params as { id: string };
+      if (!id || typeof id !== 'string') {
+        return handleError(reply, 400, 'notification id is required', 'MISSING_ID');
+      }
+      try {
+        // Only delete the caller's own notifications (A01 defense).
+        const result = await prismaQuery.notification.updateMany({
+          where: { id, trader_profile_id: user.trader_profile_id },
+          data: { deleted_at: new Date() },
+        });
+        if (result.count === 0) {
+          return handleError(reply, 404, 'notification not found', 'NOT_FOUND');
+        }
+        return reply.code(200).send({ success: true, error: null, data: { deleted: true } });
+      } catch (e) {
+        return handleServerError(reply, e as Error);
+      }
+    },
+  );
+
   done();
 };
