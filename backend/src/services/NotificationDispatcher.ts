@@ -139,3 +139,35 @@ function formatTelegramBody(input: NotificationInput): string {
   }[input.category];
   return `${prefix}\n\n${input.text}`;
 }
+
+/**
+ * Fire-and-forget dispatch wrapper. Catches all errors so callers in
+ * event-processing hot paths never throw due to notification failures.
+ */
+export function dispatchSafe(input: NotificationInput): void {
+  dispatch(input).catch((e) => {
+    console.error('[notify] dispatchSafe unhandled error:', (e as Error).message);
+  });
+}
+
+/**
+ * Batch dispatch: fans out the same category+text to multiple users.
+ * Each dispatch is independent; failures are isolated.
+ */
+export async function dispatchBatch(
+  inputs: NotificationInput[],
+): Promise<{ dispatched: number; failed: number }> {
+  let dispatched = 0;
+  let failed = 0;
+  await Promise.all(
+    inputs.map((input) =>
+      dispatch(input)
+        .then(() => { dispatched++ })
+        .catch((e) => {
+          failed++;
+          console.error('[notify] batch item failed:', (e as Error).message);
+        }),
+    ),
+  );
+  return { dispatched, failed };
+}
