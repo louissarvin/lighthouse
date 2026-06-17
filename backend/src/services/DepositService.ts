@@ -231,5 +231,40 @@ export async function depositViaZkLogin(args: {
     }
   }
 
+  console.log(`[deposit] success digest=${exec.digest} profile=${profile.id} amount=${args.amountMist.toString()}`);
   return { digest: exec.digest };
+}
+
+/**
+ * Quick check: is there a SUI coin at `address` with balance >= `minMist`?
+ * Use before showing the deposit button to give the user early feedback.
+ */
+export async function hasSufficientSuiBalance(
+  address: string,
+  minMist: bigint,
+): Promise<boolean> {
+  try {
+    const ownedRpc = suiRpc as unknown as {
+      getOwnedObjects: (args: {
+        owner: string;
+        filter?: { StructType?: string };
+        options?: { showContent?: boolean };
+      }) => Promise<{
+        data?: Array<{
+          data?: { content?: { fields?: { balance?: string } } };
+        }>;
+      }>;
+    };
+    const resp = await ownedRpc.getOwnedObjects({
+      owner: address,
+      filter: { StructType: '0x2::coin::Coin<0x2::sui::SUI>' },
+      options: { showContent: true },
+    });
+    return (resp.data ?? []).some((c) => {
+      const bal = c.data?.content?.fields?.balance;
+      return bal != null && BigInt(bal) >= minMist;
+    });
+  } catch {
+    return false;
+  }
 }
