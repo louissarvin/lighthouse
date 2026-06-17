@@ -80,12 +80,16 @@ export const statsRoutes: FastifyPluginCallback = (
         // Run both counts in parallel; independent COUNT(*) on the same
         // table, but separate Prisma calls keep the typed-query guarantee
         // (no $queryRaw, no string concat → no SQL injection surface).
-        const [walrusBlobsCount, decisionsCount] = await Promise.all([
+        const [walrusBlobsCount, decisionsCount, activeUserCount] = await Promise.all([
           prismaQuery.walrusBlob.count({
             where: { deleted_at: null },
           }),
           prismaQuery.walrusBlob.count({
             where: { deleted_at: null, kind: 0 },
+          }),
+          // Active traders: profiles that have placed at least one trade.
+          prismaQuery.traderProfile.count({
+            where: { deleted_at: null },
           }),
         ]);
 
@@ -96,6 +100,7 @@ export const statsRoutes: FastifyPluginCallback = (
             walrus_blobs_persisted: nullIfZero(walrusBlobsCount),
             decisions_logged: nullIfZero(decisionsCount),
             walrus_epochs_active: WALRUS_EPOCHS_ACTIVE_FALLBACK,
+            active_traders: nullIfZero(activeUserCount),
             last_updated_ms: Date.now(),
           },
         });
