@@ -112,3 +112,22 @@ export async function reverseSuiNS(_address: string): Promise<string | null> {
     return null;
   }
 }
+
+/**
+ * Normalise a SuiNS input: strips leading/trailing whitespace and ensures the
+ * `.sui` suffix is present. Returns null if the input cannot be a valid SuiNS.
+ * Use before `resolveSuiNS` to avoid RPC calls for obviously invalid names.
+ */
+export function normaliseSuiNSInput(input: string): string | null {
+  const trimmed = input.trim().toLowerCase()
+  if (!trimmed) return null
+  if (trimmed.includes('@')) return null          // email address
+  if (trimmed.startsWith('0x')) return null       // raw Sui address
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)*\.sui$/.test(trimmed)) {
+    // missing .sui suffix — try appending
+    const withSuffix = `${trimmed}.sui`
+    if (/^[a-z0-9-]+(\.[a-z0-9-]+)*\.sui$/.test(withSuffix)) return withSuffix
+    return null
+  }
+  return trimmed
+}
