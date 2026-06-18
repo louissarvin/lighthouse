@@ -19,7 +19,7 @@
  * through Enoki sponsorship + the user's wallet.
  */
 
-import { writeBlob } from './walrus.ts';
+import { writeBlob, blobUrl as walrusBlobUrl } from './walrus.ts';
 import { getCoachKeypair } from './keypairs.ts';
 import { suiGrpc } from './sui.ts';
 import { buildAuditAnchorTx } from './lighthouseTxs.ts';
@@ -85,7 +85,7 @@ export async function anchorBlob(
   return {
     digest: inner.digest,
     blobId,
-    blobUrl: `https://aggregator.walrus-testnet.walrus.space/v1/blobs/${blobId}`,
+    blobUrl: walrusBlobUrl(blobId),
     explorerUrl: `https://suiscan.xyz/testnet/tx/${inner.digest}`,
   };
 }
