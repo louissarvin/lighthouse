@@ -31,6 +31,10 @@ interface AppConfig {
     darkMode: boolean
     smoothScroll: boolean
   }
+  sui: {
+    network: 'testnet' | 'mainnet'
+    walrusSiteId?: string
+  }
 }
 
 const apiBaseUrl =
@@ -68,6 +72,25 @@ export const config: AppConfig = {
     darkMode: true,
     smoothScroll: true,
   },
+
+  sui: {
+    network: ((import.meta.env.VITE_SUI_NETWORK as string | undefined) ?? 'testnet') as 'testnet' | 'mainnet',
+    walrusSiteId: import.meta.env.VITE_WALRUS_SITE_ID as string | undefined,
+  },
 }
 
 export type Config = AppConfig
+
+/**
+ * Returns the Suiscan transaction explorer URL for a given digest.
+ */
+export function explorerTxUrl(digest: string): string {
+  return `${config.links.explorerBase}/tx/${digest}`
+}
+
+/**
+ * Returns the Suiscan object explorer URL for a given object ID.
+ */
+export function explorerObjectUrl(objectId: string): string {
+  return `${config.links.explorerBase}/object/${objectId}`
+}
