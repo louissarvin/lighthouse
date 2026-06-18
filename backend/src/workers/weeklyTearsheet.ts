@@ -37,8 +37,14 @@ const run = async (): Promise<void> => {
 
 export const startWeeklyTearsheetWorker = (): void => {
   console.log('[WeeklyTearsheet] scheduled — every Sunday 00:00 UTC');
-  cron.schedule('0 0 * * 0', run, { timezone: 'UTC' });
+  cron.schedule('0 0 * * 0', () => void run(), { timezone: 'UTC' });
 };
 
 /// Exported for one-shot CLI / manual replay (e.g. `bun scripts/run-weekly.ts`).
 export { run as runWeeklyTearsheetNow };
+
+/// Returns true when the weekly tearsheet worker is currently executing.
+/// Useful for health checks to detect long-running tearsheet jobs.
+export function isWeeklyTearsheetRunning(): boolean {
+  return isRunning;
+}
