@@ -433,3 +433,6 @@ export const stopAutoDepositSweeper = (): void => {
     cronTask = null;
   }
 };
+
+/// Returns true while a sweep tick is running. Use for health checks.
+export const isAutoDepositSweeperRunning = (): boolean => isRunning;
