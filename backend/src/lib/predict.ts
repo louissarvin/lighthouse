@@ -859,3 +859,20 @@ export async function getWalletBalances(
     return { suiRaw: 0n, dusdcRaw: 0n };
   }
 }
+
+/**
+ * Format a binary predict position for concise logging.
+ * e.g. "UP BTC/USD @ $65000 qty=10 DUSDC exp=2026-06-22T12:00:00Z"
+ */
+export function formatPositionLog(
+  isUp: boolean,
+  strikeScaled: bigint,
+  quantityDusdc: bigint,
+  expiryMs: number | bigint,
+): string {
+  const direction = isUp ? 'UP' : 'DOWN'
+  const strikeUsd = (Number(strikeScaled) / 1e9).toFixed(2)
+  const qty = (Number(quantityDusdc) / 1_000_000).toFixed(2)
+  const expiry = new Date(Number(expiryMs)).toISOString()
+  return `${direction} BTC/USD @ $${strikeUsd} qty=${qty} DUSDC exp=${expiry}`
+}
