@@ -195,3 +195,25 @@ export async function getAllManagerBalances(
   }
   return results;
 }
+
+/**
+ * Evict a cached DeepBookClient for a given BalanceManager ID.
+ * Call after the user creates a new BM or after a forced reset so the next
+ * query re-builds the client with fresh state.
+ */
+export function evictDeepBookClientCache(balanceManagerId: string): void {
+  cache.delete(balanceManagerId);
+}
+
+/**
+ * Returns the mid-price formatted as a human-readable USD string.
+ * e.g. 98_000_000_000_000n → "$98.00"
+ * Used for quick display in logs and Telegram messages.
+ */
+export function formatMidPriceUsd(floatScaledMid: bigint): string {
+  // FLOAT_SCALING = 1e9. Mid is quote(DUSDC per SUI) * 1e9.
+  // DUSDC has 6 decimals but prices are scaled differently.
+  // The value in human DUSDC/SUI is floatScaledMid / 1e9.
+  const humanPrice = Number(floatScaledMid) / 1_000_000_000;
+  return `$${humanPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
