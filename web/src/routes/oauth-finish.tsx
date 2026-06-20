@@ -4,8 +4,47 @@ import { createFileRoute, useNavigate, useSearch } from '@tanstack/react-router'
 import PillNav from '@/components/landing/PillNav'
 import { Container } from '@/components/ui/Container'
 import { Skeleton } from '@/components/ui/Skeleton'
-import { apiFetch } from '@/lib/api'
+import { ApiError, apiFetch } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
+
+// Module-level in-flight cache so React StrictMode's double-mount in dev
+// (and any unforeseen remount) does not POST /auth/web/set-cookie twice
+// with the same single-use handoff token. First fire kicks off the exchange,
+// subsequent fires await the same promise.
+const inflightHandoffs = new Map<string, Promise<void>>()
+
+/**
+ * Exchange the handoff token for the lh_jwt cookie. Idempotent across remounts.
+ * A "handoff already used" response from the backend is treated as success —
+ * it means a prior call already burned the token and set the cookie.
+ */
+function exchangeHandoffOnce(handoff: string): Promise<void> {
+  const existing = inflightHandoffs.get(handoff)
+  if (existing) return existing
+  const promise = (async () => {
+    try {
+      await apiFetch('/auth/web/set-cookie', {
+        method: 'POST',
+        body: { handoff },
+      })
+    } catch (e) {
+      // If the error is the duplicate-burn case, the cookie was set by the
+      // first fire. Anything else propagates.
+      const msg = (e as Error).message?.toLowerCase() ?? ''
+      const isAlreadyUsed =
+        e instanceof ApiError &&
+        (e.status === 400 || e.status === 409) &&
+        (msg.includes('already') ||
+          msg.includes('used') ||
+          msg.includes('consumed') ||
+          e.code === 'HANDOFF_USED' ||
+          e.code === 'HANDOFF_CONSUMED')
+      if (!isAlreadyUsed) throw e
+    }
+  })()
+  inflightHandoffs.set(handoff, promise)
+  return promise
+}
 
 interface OAuthFinishSearch {
   handoff?: string
@@ -49,21 +88,25 @@ function OAuthFinishPage() {
         return
       }
       try {
-        await apiFetch('/auth/web/set-cookie', {
-          method: 'POST',
-          body: { handoff: search.handoff },
-        })
+        await exchangeHandoffOnce(search.handoff)
         if (cancelled) return
         const freshProfile = await refresh()
         if (cancelled) return
         setStage('redirecting')
         const intendedNext = search.next ?? '/coach'
-        // If risk profile isn't complete, route through /setup so the user
-        // completes onboarding before landing on the protected destination.
-        const next =
-          freshProfile && !freshProfile.riskProfileCompletedAt
+        // Route the user through any missing onboarding steps before landing
+        // on the intended destination. Order: memwal → risk profile → dest.
+        let next: string
+        if (!freshProfile?.memwalAccountId) {
+          const afterMemwal = !freshProfile?.riskProfileCompletedAt
             ? `/setup?next=${encodeURIComponent(intendedNext)}`
             : intendedNext
+          next = `/memwal-setup?next=${encodeURIComponent(afterMemwal)}`
+        } else if (freshProfile && !freshProfile.riskProfileCompletedAt) {
+          next = `/setup?next=${encodeURIComponent(intendedNext)}`
+        } else {
+          next = intendedNext
+        }
         setTimeout(() => {
           if (!cancelled) {
             navigate({ to: next as never, replace: true })
