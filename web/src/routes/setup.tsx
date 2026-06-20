@@ -11,7 +11,7 @@ import type {
   RiskQuestionsResponse,
 } from '@/lib/types'
 import { apiFetch } from '@/lib/api'
-import { requireAuth } from '@/lib/requireAuth'
+import { requireMemWal } from '@/lib/requireAuth'
 import { useAuth } from '@/hooks/useAuth'
 import { Card } from '@/components/ui/Card'
 import { EyebrowTag } from '@/components/ui/EyebrowTag'
@@ -35,7 +35,7 @@ export const Route = createFileRoute('/setup')({
         ? search.next
         : undefined,
   }),
-  beforeLoad: requireAuth,
+  beforeLoad: requireMemWal,
   component: SetupPage,
   head: () => ({
     meta: [
@@ -341,14 +341,15 @@ function SetupWizard({
       {/* Header */}
       <div>
         <EyebrowTag prefix="dot" className="mb-3">
-          Risk profile
+          Step 2 of 2
         </EyebrowTag>
         <h1 className="text-3xl font-bold tracking-[-0.03em] mb-2">
           Set up your risk profile
         </h1>
         <p className="text-lh-text-dim text-sm max-w-lg">
-          5 quick questions so your coach can advise you properly. Stored in
-          your encrypted MemWal — only you can recall.
+          Five quick questions so your coach can advise you properly. Your
+          answers are stored in your encrypted MemWal — only you can recall
+          them.
         </p>
       </div>
 
