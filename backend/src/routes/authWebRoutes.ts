@@ -232,8 +232,19 @@ export const authWebRoutes: FastifyPluginCallback = (
   });
 
   // POST /auth/web/logout — clear cookie.
+  //
+  // CRITICAL: the clear must match EVERY attribute on the original Set-Cookie
+  // or Chrome treats it as a different cookie and leaves the original intact.
+  // The original had `Partitioned; SameSite=None; Secure; Path=/`, so the clear
+  // must too. Symptom of mismatch: POST /logout returns 200 but subsequent
+  // /profile/me requests still succeed because the cookie was never cleared.
   app.post('/logout', async (_request: FastifyRequest, reply: FastifyReply) => {
-    reply.clearCookie(WEB_COOKIE_NAME, { path: '/' });
+    reply.clearCookie(WEB_COOKIE_NAME, {
+      path: '/',
+      sameSite: 'none',
+      secure: true,
+      partitioned: true,
+    });
     return reply.code(200).send({ success: true, error: null, data: { loggedOut: true } });
   });
 
