@@ -227,7 +227,10 @@ export default function AppNav() {
   async function handleSignOut() {
     setMenuOpen(false)
     await signOut()
-    await navigate({ to: '/' })
+    // Route to /auth (not /) so the user lands on a clear sign-in surface
+    // instead of the marketing landing. Mirrors the convention that gated
+    // routes also redirect to /auth on auth failure.
+    await navigate({ to: '/auth' })
   }
 
   return (
