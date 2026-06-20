@@ -70,6 +70,7 @@ function buildCookieOptions(): {
   sameSite: 'none';
   path: string;
   maxAge: number;
+  partitioned: boolean;
 } {
   // Modern browsers (Chrome / Safari / Firefox) treat `http://localhost` as a
   // "potentially trustworthy" origin and accept `Secure` cookies on it. That
@@ -77,6 +78,14 @@ function buildCookieOptions(): {
   // `SameSite=None; Secure` cookie shape we ship to production, avoiding the
   // Lax-only-on-top-level-nav trap that breaks background `fetch` carrying the
   // session cookie.
+  //
+  // `Partitioned` (CHIPS) is REQUIRED in modern Chrome (116+) for third-party
+  // cookies — i.e. when the web origin (vercel.app) and API origin
+  // (railway.app) have different registrable domains. Without it, the cookie
+  // is silently dropped on subsequent cross-origin requests even though the
+  // initial Set-Cookie succeeded. Symptom: /auth/web/set-cookie returns 200,
+  // then /profile/me returns 401 because the cookie was never sent.
+  // Doc: https://developers.google.com/privacy-sandbox/cookies/chips
   void IS_DEV;
   return {
     httpOnly: true,
@@ -84,6 +93,7 @@ function buildCookieOptions(): {
     sameSite: 'none',
     path: '/',
     maxAge: COOKIE_MAX_AGE_S,
+    partitioned: true,
   };
 }
 
