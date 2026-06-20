@@ -233,17 +233,31 @@ export const authWebRoutes: FastifyPluginCallback = (
 
   // POST /auth/web/logout — clear cookie.
   //
-  // CRITICAL: the clear must match EVERY attribute on the original Set-Cookie
-  // or Chrome treats it as a different cookie and leaves the original intact.
-  // The original had `Partitioned; SameSite=None; Secure; Path=/`, so the clear
-  // must too. Symptom of mismatch: POST /logout returns 200 but subsequent
-  // /profile/me requests still succeed because the cookie was never cleared.
+  // CRITICAL: Chrome matches cookies for clearing by (name, domain, path,
+  // partition-key). The `Partitioned` attribute changes the partition-key.
+  // We added `Partitioned: true` to the Set-Cookie path in a later wave, so
+  // there are TWO classes of `lh_jwt` cookies in the wild:
+  //   1. Old (non-Partitioned) — set before the Partitioned fix shipped
+  //   2. New (Partitioned)     — set after the Partitioned fix shipped
+  //
+  // A single clear only matches ONE of the two. Sending BOTH clear directives
+  // covers both states, so sign-out is bulletproof regardless of when the
+  // user originally signed in. Browsers safely no-op the directive that
+  // doesn't match an existing cookie.
   app.post('/logout', async (_request: FastifyRequest, reply: FastifyReply) => {
+    // Clear the Partitioned variant (new sign-ins).
     reply.clearCookie(WEB_COOKIE_NAME, {
       path: '/',
       sameSite: 'none',
       secure: true,
       partitioned: true,
+    });
+    // Clear the non-Partitioned variant (legacy sign-ins from before the
+    // Partitioned attribute was added to the Set-Cookie path).
+    reply.clearCookie(WEB_COOKIE_NAME, {
+      path: '/',
+      sameSite: 'none',
+      secure: true,
     });
     return reply.code(200).send({ success: true, error: null, data: { loggedOut: true } });
   });
