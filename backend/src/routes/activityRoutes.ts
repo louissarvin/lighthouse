@@ -51,9 +51,11 @@ import { handleError, handleServerError } from '../utils/errorHandler.ts';
 
 // === Constants ===
 
-/// Hard ceiling chosen to keep response payload small (~5 fields x 20 events
-/// x 5 kinds ≈ 100 rows max) and discourage scraping via this endpoint.
-const MAX_LIMIT = 20;
+/// Hard ceiling chosen to keep response payload small. Bumped to 50 because
+/// the web's AnchorTimeline polls with `limit=30` and got 400'd at the
+/// previous cap of 20. 50 keeps payload manageable (~5 fields x 50 events
+/// x 5 kinds ≈ 250 rows max) while accommodating real UI defaults.
+const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 5;
 const SUMMARY_MAX_CHARS = 120;
 /// `/activity/me` cap is more permissive because it is auth-scoped and the
