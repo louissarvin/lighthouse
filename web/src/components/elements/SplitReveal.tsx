@@ -1,18 +1,30 @@
-import { useEffect, useRef } from 'react'
+import { useRef } from 'react'
 import { gsap } from 'gsap'
 import { ScrollTrigger } from 'gsap/ScrollTrigger'
+import { useGSAP } from '@gsap/react'
 import type { ReactNode } from 'react'
 import { cnm } from '@/utils/style'
 
-gsap.registerPlugin(ScrollTrigger)
+gsap.registerPlugin(ScrollTrigger, useGSAP)
 
 // SplitReveal - per-line wipe reveal inside overflow-hidden containers.
 //
 // Technique: sui.io / overflow.sui.io (BATCH2_TECH_SUMMARY Rank 1).
 //
-// SSR strategy: text renders VISIBLE by default. GSAP uses gsap.from() to
-// animate from yPercent: 100 (hidden) to the natural rendered state. If JS
+// SSR strategy: text renders VISIBLE by default. GSAP uses fromTo() to
+// animate from yPercent: 100 (hidden) to yPercent: 0 (natural). If JS
 // fails to run, text remains visible - graceful degradation, never FOUC-to-hidden.
+//
+// Why fromTo and not from: gsap.from() snapshots current position as the
+// destination. Under React Strict Mode the effect runs twice; the cleanup
+// between runs kills the in-flight tween while the element is still at
+// yPercent: 100, and the second run then reads 100 as the natural position,
+// permanently clipping the text. fromTo() is idempotent - explicit start
+// AND end values survive any number of remounts.
+//
+// useGSAP from @gsap/react handles the React lifecycle and cleanup correctly,
+// matching the pattern used elsewhere in the codebase (Hero, PrimitivesGrid,
+// StatsStrip, WhatIsLighthouse).
 //
 // When immediate=true: skip ScrollTrigger and animate on mount. Use for
 // above-the-fold content (hero) where the element is always in view.
@@ -42,49 +54,49 @@ export function SplitReveal({
 }: SplitRevealProps) {
   const scopeRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    const scope = scopeRef.current
-    if (!scope) return
+  useGSAP(
+    () => {
+      const scope = scopeRef.current
+      if (!scope) return
 
-    const inners = Array.from(
-      scope.querySelectorAll<HTMLElement>('.split-line-inner'),
-    )
-    if (inners.length === 0) return
+      const inners = Array.from(
+        scope.querySelectorAll<HTMLElement>('.split-line-inner'),
+      )
+      if (inners.length === 0) return
 
-    const prefersReduced =
-      typeof window !== 'undefined' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      const prefersReduced =
+        typeof window !== 'undefined' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
-    if (prefersReduced) return // text already visible at natural position
-
-    const tweenVars: gsap.TweenVars = {
-      yPercent: 100,
-      stagger,
-      delay,
-      duration: 0.525,
-      ease: 'sui',
-      overwrite: 'auto',
-    }
-
-    if (!immediate) {
-      tweenVars.scrollTrigger = {
-        trigger: scope,
-        start,
-        once: true,
+      if (prefersReduced) {
+        // Ensure final state in case a prior tween left things mid-flight.
+        gsap.set(inners, { yPercent: 0, clearProps: 'transform' })
+        return
       }
-    }
 
-    // gsap.from: snapshot current (natural) state as the destination, animate
-    // FROM yPercent: 100. Text is already rendered at the destination, so
-    // there is a one-frame flash before GSAP grabs it. Acceptable trade-off
-    // for guaranteed visibility if anything in the animation pipeline fails.
-    const tween = gsap.from(inners, tweenVars)
+      const tweenVars: gsap.TweenVars = {
+        yPercent: 0,
+        stagger,
+        delay,
+        duration: 0.525,
+        ease: 'sui',
+        overwrite: 'auto',
+      }
 
-    return () => {
-      tween.scrollTrigger?.kill()
-      tween.kill()
-    }
-  }, [immediate, stagger, delay, start])
+      if (!immediate) {
+        tweenVars.scrollTrigger = {
+          trigger: scope,
+          start,
+          once: true,
+        }
+      }
+
+      // Explicit start (yPercent: 100) AND end (yPercent: 0) makes the tween
+      // safe against Strict Mode double-invocation and any remount cycle.
+      gsap.fromTo(inners, { yPercent: 100 }, tweenVars)
+    },
+    { scope: scopeRef, dependencies: [immediate, stagger, delay, start] },
+  )
 
   return (
     <div ref={scopeRef}>
