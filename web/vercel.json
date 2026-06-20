@@ -5,7 +5,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://YOUR_BACKEND_DOMAIN https://api.enoki.mystenlabs.com https://*.mystenlabs.com https://fullnode.testnet.sui.io https://fullnode.mainnet.sui.io https://accounts.google.com https://oauth2.googleapis.com https://www.googleapis.com https://*.wal.app https://aggregator.walrus-testnet.walrus.space https://suiscan.xyz wss: ws:; frame-src https://accounts.google.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://backend-starter-production-8b76.up.railway.app https://api.enoki.mystenlabs.com https://*.mystenlabs.com https://fullnode.testnet.sui.io https://fullnode.mainnet.sui.io https://accounts.google.com https://oauth2.googleapis.com https://www.googleapis.com https://*.wal.app https://aggregator.walrus-testnet.walrus.space https://publisher.walrus-testnet.walrus.space https://suiscan.xyz https://testnet.suivision.xyz wss: ws:; frame-src https://accounts.google.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
         },
         {
           "key": "Strict-Transport-Security",
