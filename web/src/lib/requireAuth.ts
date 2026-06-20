@@ -63,18 +63,49 @@ export async function requireAuth({
 }
 
 /**
+ * Like `requireAuth`, but also redirects to `/memwal-setup` when the user has
+ * not yet bootstrapped their MemWal account.
+ *
+ * Use this on routes that need MemWal to be present (e.g. /setup, /coach).
+ * Do NOT use on /memwal-setup itself — that would infinite-loop.
+ */
+export async function requireMemWal(args: {
+  context: RouterContext
+  location: RouterLocation
+}): Promise<{ profile: ProfileMe }> {
+  const result = await requireAuth(args)
+  if (!result.profile.memwalAccountId) {
+    const search = args.location.search ?? {}
+    const nextRaw =
+      typeof search.next === 'string' &&
+      search.next.startsWith('/') &&
+      !search.next.startsWith('//')
+        ? search.next
+        : args.location.pathname
+    throw redirect({
+      to: '/memwal-setup',
+      search: { next: nextRaw } as never,
+    })
+  }
+  return result
+}
+
+/**
  * Like `requireAuth`, but also redirects to `/setup` when the user has not
  * completed the risk profile questionnaire.
  *
+ * Chains through `requireMemWal` first — so the gate order is always:
+ * auth → memwal → risk profile → destination.
+ *
  * Use this on every protected route that requires risk setup (coach, predict,
- * trade). Do NOT use it on /setup itself or /portfolio — those must remain
- * reachable before the questionnaire is finished.
+ * trade). Do NOT use it on /setup or /memwal-setup — those must be reachable
+ * before the respective step is finished.
  */
 export async function requireRiskSetup(args: {
   context: RouterContext
   location: RouterLocation
 }): Promise<{ profile: ProfileMe }> {
-  const result = await requireAuth(args)
+  const result = await requireMemWal(args)
   if (!result.profile.riskProfileCompletedAt) {
     const search = args.location.search ?? {}
     const nextRaw =
