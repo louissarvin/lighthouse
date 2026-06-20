@@ -44,6 +44,7 @@ export function MemWalBootstrapCard({ profile: _profile }: Props) {
       setSuccess(exec2.digest)
       void qc.invalidateQueries({ queryKey: ['memwal', 'namespaces'] })
       void qc.invalidateQueries({ queryKey: ['profile'] })
+      void qc.invalidateQueries({ queryKey: ['auth', 'profile-me'] })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Bootstrap failed')
     } finally {
