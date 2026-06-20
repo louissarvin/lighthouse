@@ -18,6 +18,7 @@ import { Route as PredictRouteImport } from './routes/predict'
 import { Route as PortfolioRouteImport } from './routes/portfolio'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as OauthFinishRouteImport } from './routes/oauth-finish'
+import { Route as MemwalSetupRouteImport } from './routes/memwal-setup'
 import { Route as CoachRouteImport } from './routes/coach'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as ActivityRouteImport } from './routes/activity'
@@ -72,6 +73,11 @@ const OnboardingRoute = OnboardingRouteImport.update({
 const OauthFinishRoute = OauthFinishRouteImport.update({
   id: '/oauth-finish',
   path: '/oauth-finish',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MemwalSetupRoute = MemwalSetupRouteImport.update({
+  id: '/memwal-setup',
+  path: '/memwal-setup',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CoachRoute = CoachRouteImport.update({
@@ -130,6 +136,7 @@ export interface FileRoutesByFullPath {
   '/activity': typeof ActivityRoute
   '/auth': typeof AuthRoute
   '/coach': typeof CoachRoute
+  '/memwal-setup': typeof MemwalSetupRoute
   '/oauth-finish': typeof OauthFinishRoute
   '/onboarding': typeof OnboardingRoute
   '/portfolio': typeof PortfolioRoute
@@ -151,6 +158,7 @@ export interface FileRoutesByTo {
   '/activity': typeof ActivityRoute
   '/auth': typeof AuthRoute
   '/coach': typeof CoachRoute
+  '/memwal-setup': typeof MemwalSetupRoute
   '/oauth-finish': typeof OauthFinishRoute
   '/onboarding': typeof OnboardingRoute
   '/portfolio': typeof PortfolioRoute
@@ -173,6 +181,7 @@ export interface FileRoutesById {
   '/activity': typeof ActivityRoute
   '/auth': typeof AuthRoute
   '/coach': typeof CoachRoute
+  '/memwal-setup': typeof MemwalSetupRoute
   '/oauth-finish': typeof OauthFinishRoute
   '/onboarding': typeof OnboardingRoute
   '/portfolio': typeof PortfolioRoute
@@ -196,6 +205,7 @@ export interface FileRouteTypes {
     | '/activity'
     | '/auth'
     | '/coach'
+    | '/memwal-setup'
     | '/oauth-finish'
     | '/onboarding'
     | '/portfolio'
@@ -217,6 +227,7 @@ export interface FileRouteTypes {
     | '/activity'
     | '/auth'
     | '/coach'
+    | '/memwal-setup'
     | '/oauth-finish'
     | '/onboarding'
     | '/portfolio'
@@ -238,6 +249,7 @@ export interface FileRouteTypes {
     | '/activity'
     | '/auth'
     | '/coach'
+    | '/memwal-setup'
     | '/oauth-finish'
     | '/onboarding'
     | '/portfolio'
@@ -260,6 +272,7 @@ export interface RootRouteChildren {
   ActivityRoute: typeof ActivityRoute
   AuthRoute: typeof AuthRoute
   CoachRoute: typeof CoachRoute
+  MemwalSetupRoute: typeof MemwalSetupRoute
   OauthFinishRoute: typeof OauthFinishRoute
   OnboardingRoute: typeof OnboardingRoute
   PortfolioRoute: typeof PortfolioRoute
@@ -339,6 +352,13 @@ declare module '@tanstack/react-router' {
       path: '/oauth-finish'
       fullPath: '/oauth-finish'
       preLoaderRoute: typeof OauthFinishRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/memwal-setup': {
+      id: '/memwal-setup'
+      path: '/memwal-setup'
+      fullPath: '/memwal-setup'
+      preLoaderRoute: typeof MemwalSetupRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/coach': {
@@ -429,6 +449,7 @@ const rootRouteChildren: RootRouteChildren = {
   ActivityRoute: ActivityRoute,
   AuthRoute: AuthRoute,
   CoachRoute: CoachRoute,
+  MemwalSetupRoute: MemwalSetupRoute,
   OauthFinishRoute: OauthFinishRoute,
   OnboardingRoute: OnboardingRoute,
   PortfolioRoute: PortfolioRoute,
