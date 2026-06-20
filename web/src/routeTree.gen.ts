@@ -20,14 +20,17 @@ import { Route as PortfolioRouteImport } from './routes/portfolio'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as OauthFinishRouteImport } from './routes/oauth-finish'
 import { Route as MemwalSetupRouteImport } from './routes/memwal-setup'
+import { Route as LeaderboardRouteImport } from './routes/leaderboard'
 import { Route as CoachRouteImport } from './routes/coach'
 import { Route as AuthRouteImport } from './routes/auth'
+import { Route as AuditRouteImport } from './routes/audit'
 import { Route as ActivityRouteImport } from './routes/activity'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DocsIndexRouteImport } from './routes/docs/index'
 import { Route as UNameRouteImport } from './routes/u.$name'
 import { Route as ReceiptIdRouteImport } from './routes/receipt.$id'
 import { Route as MemwalRevokeRouteImport } from './routes/memwal.revoke'
+import { Route as FollowAddressRouteImport } from './routes/follow.$address'
 import { Route as DocsSlugRouteImport } from './routes/docs/$slug'
 import { Route as UNameWeekRouteImport } from './routes/u.$name.$week'
 
@@ -86,6 +89,11 @@ const MemwalSetupRoute = MemwalSetupRouteImport.update({
   path: '/memwal-setup',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LeaderboardRoute = LeaderboardRouteImport.update({
+  id: '/leaderboard',
+  path: '/leaderboard',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CoachRoute = CoachRouteImport.update({
   id: '/coach',
   path: '/coach',
@@ -94,6 +102,11 @@ const CoachRoute = CoachRouteImport.update({
 const AuthRoute = AuthRouteImport.update({
   id: '/auth',
   path: '/auth',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuditRoute = AuditRouteImport.update({
+  id: '/audit',
+  path: '/audit',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ActivityRoute = ActivityRouteImport.update({
@@ -126,6 +139,11 @@ const MemwalRevokeRoute = MemwalRevokeRouteImport.update({
   path: '/memwal/revoke',
   getParentRoute: () => rootRouteImport,
 } as any)
+const FollowAddressRoute = FollowAddressRouteImport.update({
+  id: '/follow/$address',
+  path: '/follow/$address',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DocsSlugRoute = DocsSlugRouteImport.update({
   id: '/docs/$slug',
   path: '/docs/$slug',
@@ -140,8 +158,10 @@ const UNameWeekRoute = UNameWeekRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/activity': typeof ActivityRoute
+  '/audit': typeof AuditRoute
   '/auth': typeof AuthRoute
   '/coach': typeof CoachRoute
+  '/leaderboard': typeof LeaderboardRoute
   '/memwal-setup': typeof MemwalSetupRoute
   '/oauth-finish': typeof OauthFinishRoute
   '/onboarding': typeof OnboardingRoute
@@ -154,6 +174,7 @@ export interface FileRoutesByFullPath {
   '/terms': typeof TermsRoute
   '/trade': typeof TradeRoute
   '/docs/$slug': typeof DocsSlugRoute
+  '/follow/$address': typeof FollowAddressRoute
   '/memwal/revoke': typeof MemwalRevokeRoute
   '/receipt/$id': typeof ReceiptIdRoute
   '/u/$name': typeof UNameRouteWithChildren
@@ -163,8 +184,10 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/activity': typeof ActivityRoute
+  '/audit': typeof AuditRoute
   '/auth': typeof AuthRoute
   '/coach': typeof CoachRoute
+  '/leaderboard': typeof LeaderboardRoute
   '/memwal-setup': typeof MemwalSetupRoute
   '/oauth-finish': typeof OauthFinishRoute
   '/onboarding': typeof OnboardingRoute
@@ -177,6 +200,7 @@ export interface FileRoutesByTo {
   '/terms': typeof TermsRoute
   '/trade': typeof TradeRoute
   '/docs/$slug': typeof DocsSlugRoute
+  '/follow/$address': typeof FollowAddressRoute
   '/memwal/revoke': typeof MemwalRevokeRoute
   '/receipt/$id': typeof ReceiptIdRoute
   '/u/$name': typeof UNameRouteWithChildren
@@ -187,8 +211,10 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/activity': typeof ActivityRoute
+  '/audit': typeof AuditRoute
   '/auth': typeof AuthRoute
   '/coach': typeof CoachRoute
+  '/leaderboard': typeof LeaderboardRoute
   '/memwal-setup': typeof MemwalSetupRoute
   '/oauth-finish': typeof OauthFinishRoute
   '/onboarding': typeof OnboardingRoute
@@ -201,6 +227,7 @@ export interface FileRoutesById {
   '/terms': typeof TermsRoute
   '/trade': typeof TradeRoute
   '/docs/$slug': typeof DocsSlugRoute
+  '/follow/$address': typeof FollowAddressRoute
   '/memwal/revoke': typeof MemwalRevokeRoute
   '/receipt/$id': typeof ReceiptIdRoute
   '/u/$name': typeof UNameRouteWithChildren
@@ -212,8 +239,10 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/activity'
+    | '/audit'
     | '/auth'
     | '/coach'
+    | '/leaderboard'
     | '/memwal-setup'
     | '/oauth-finish'
     | '/onboarding'
@@ -226,6 +255,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/trade'
     | '/docs/$slug'
+    | '/follow/$address'
     | '/memwal/revoke'
     | '/receipt/$id'
     | '/u/$name'
@@ -235,8 +265,10 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/activity'
+    | '/audit'
     | '/auth'
     | '/coach'
+    | '/leaderboard'
     | '/memwal-setup'
     | '/oauth-finish'
     | '/onboarding'
@@ -249,6 +281,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/trade'
     | '/docs/$slug'
+    | '/follow/$address'
     | '/memwal/revoke'
     | '/receipt/$id'
     | '/u/$name'
@@ -258,8 +291,10 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/activity'
+    | '/audit'
     | '/auth'
     | '/coach'
+    | '/leaderboard'
     | '/memwal-setup'
     | '/oauth-finish'
     | '/onboarding'
@@ -272,6 +307,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/trade'
     | '/docs/$slug'
+    | '/follow/$address'
     | '/memwal/revoke'
     | '/receipt/$id'
     | '/u/$name'
@@ -282,8 +318,10 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActivityRoute: typeof ActivityRoute
+  AuditRoute: typeof AuditRoute
   AuthRoute: typeof AuthRoute
   CoachRoute: typeof CoachRoute
+  LeaderboardRoute: typeof LeaderboardRoute
   MemwalSetupRoute: typeof MemwalSetupRoute
   OauthFinishRoute: typeof OauthFinishRoute
   OnboardingRoute: typeof OnboardingRoute
@@ -296,6 +334,7 @@ export interface RootRouteChildren {
   TermsRoute: typeof TermsRoute
   TradeRoute: typeof TradeRoute
   DocsSlugRoute: typeof DocsSlugRoute
+  FollowAddressRoute: typeof FollowAddressRoute
   MemwalRevokeRoute: typeof MemwalRevokeRoute
   ReceiptIdRoute: typeof ReceiptIdRoute
   UNameRoute: typeof UNameRouteWithChildren
@@ -381,6 +420,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MemwalSetupRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/leaderboard': {
+      id: '/leaderboard'
+      path: '/leaderboard'
+      fullPath: '/leaderboard'
+      preLoaderRoute: typeof LeaderboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/coach': {
       id: '/coach'
       path: '/coach'
@@ -393,6 +439,13 @@ declare module '@tanstack/react-router' {
       path: '/auth'
       fullPath: '/auth'
       preLoaderRoute: typeof AuthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/audit': {
+      id: '/audit'
+      path: '/audit'
+      fullPath: '/audit'
+      preLoaderRoute: typeof AuditRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/activity': {
@@ -437,6 +490,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MemwalRevokeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/follow/$address': {
+      id: '/follow/$address'
+      path: '/follow/$address'
+      fullPath: '/follow/$address'
+      preLoaderRoute: typeof FollowAddressRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/docs/$slug': {
       id: '/docs/$slug'
       path: '/docs/$slug'
@@ -467,8 +527,10 @@ const UNameRouteWithChildren = UNameRoute._addFileChildren(UNameRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActivityRoute: ActivityRoute,
+  AuditRoute: AuditRoute,
   AuthRoute: AuthRoute,
   CoachRoute: CoachRoute,
+  LeaderboardRoute: LeaderboardRoute,
   MemwalSetupRoute: MemwalSetupRoute,
   OauthFinishRoute: OauthFinishRoute,
   OnboardingRoute: OnboardingRoute,
@@ -481,6 +543,7 @@ const rootRouteChildren: RootRouteChildren = {
   TermsRoute: TermsRoute,
   TradeRoute: TradeRoute,
   DocsSlugRoute: DocsSlugRoute,
+  FollowAddressRoute: FollowAddressRoute,
   MemwalRevokeRoute: MemwalRevokeRoute,
   ReceiptIdRoute: ReceiptIdRoute,
   UNameRoute: UNameRouteWithChildren,
