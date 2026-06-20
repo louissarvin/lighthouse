@@ -235,9 +235,10 @@ export interface HedgePosition {
   created_at: string
 }
 
-export interface PredictPositionsResponse {
-  positions: Array<HedgePosition>
-}
+// PredictPositionsResponse is declared canonically below near the
+// PredictPosition type (used by /predict/positions-own). The HedgePosition
+// interface above is kept for callers that consume the richer DB-shaped
+// view (e.g. tearsheets).
 
 // ────────────────────────────────────────────────────────────────────────
 // Balance
