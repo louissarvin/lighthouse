@@ -1,54 +1,51 @@
-# Use a Node.js base image
-FROM node:18.15-slim as builder
+# Lighthouse backend — Bun + Fastify + Prisma 7 (Railway / Docker)
 
-RUN apt-get update -y
-RUN apt-get install -y openssl
+FROM oven/bun:1.3-debian AS builder
 
-# Set the working directory in the Docker container
-WORKDIR /usr/src/app
+WORKDIR /app
 
-# Copy package.json and package-lock.json (or npm-shrinkwrap.json) to the working directory
-COPY ["package.json", "package-lock.json*", "npm-shrinkwrap.json*", "./"]
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies including 'devDependencies' for building
-RUN npm install --silent
+COPY package.json bun.lockb ./
 
-# Copy the rest of your application's source code
-COPY . .
+RUN bun install --frozen-lockfile
 
-# Use Prisma to generate client
-RUN npx prisma generate
+COPY prisma ./prisma
+COPY index.ts dotenv.ts ./
+COPY src ./src
 
-# Start a new stage to keep the final image small
-FROM node:18.15-slim
+# prisma.config.ts reads DATABASE_URL at load time; a dummy value is fine for generate.
+ENV DATABASE_URL="postgresql://build:build@127.0.0.1:5432/build?schema=public"
 
-# Environment variable to set node environment to production
+RUN bunx prisma generate --config prisma/prisma.config.ts
+
+FROM oven/bun:1.3-debian AS runner
+
+WORKDIR /app
+
 ENV NODE_ENV=production
 
-# Set the working directory in the Docker container
-WORKDIR /usr/src/app
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/* \
+  && groupadd --system --gid 1001 lighthouse \
+  && useradd --system --uid 1001 --gid lighthouse lighthouse
 
-# Copy package.json and package-lock.json (or npm-shrinkwrap.json)
-COPY ["package.json", "package-lock.json*", "npm-shrinkwrap.json*", "./"]
+COPY package.json bun.lockb ./
 
-# Install only production dependencies
-RUN npm install --production --silent
+RUN bun install --frozen-lockfile --production
 
-# Copy the application source files (JavaScript) from the builder stage
-COPY --from=builder /usr/src/app ./
+COPY --from=builder /app/prisma ./prisma
+COPY index.ts dotenv.ts ./
+COPY src ./src
 
-# Copy Prisma schema and migrations
-COPY prisma ./prisma
+RUN chown -R lighthouse:lighthouse /app
 
-# Generate Prisma client
-RUN npx prisma generate
+USER lighthouse
 
-# Use non-root user for better security
-RUN chown -R node /usr
-USER node
+EXPOSE 3700
 
-# Expose the port your app runs on
-EXPOSE 3677
-
-# Command to run your app
-CMD ["node", "index.js"]
+# Railway sets PORT; the app reads APP_PORT (see main-config.ts).
+CMD ["sh", "-c", "APP_PORT=${PORT:-${APP_PORT:-3700}} exec bun run start"]
