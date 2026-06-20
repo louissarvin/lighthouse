@@ -4,7 +4,7 @@ import {
   createRootRouteWithContext,
 } from '@tanstack/react-router'
 
-import { useCurrentAccount } from '@mysten/dapp-kit'
+import { useCurrentAccount, useDisconnectWallet } from '@mysten/dapp-kit'
 
 import HeroUIProvider from '../providers/HeroUIProvider'
 import LenisSmoothScrollProvider from '../providers/LenisSmoothScrollProvider'
@@ -59,13 +59,28 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 })
 
 /**
- * Bridges the dapp-kit wallet account into AuthProvider.
+ * Bridges the dapp-kit wallet account into AuthProvider AND wires the
+ * Enoki disconnect into AuthProvider's signOut. Without the disconnect,
+ * the Enoki ephemeral signing key persists in IndexedDB across sign-outs
+ * — the cookie is cleared but the signing key the next user could use to
+ * impersonate the prior user is not. This bridge fixes that.
+ *
  * Must be rendered inside SuiEnokiProvider (WalletProvider context).
  */
 function AuthProviderWithEnoki({ children }: { children: React.ReactNode }) {
   const account = useCurrentAccount()
+  const { mutateAsync: disconnectWallet } = useDisconnectWallet()
   return (
-    <AuthProvider enokiAddress={account?.address ?? null}>
+    <AuthProvider
+      enokiAddress={account?.address ?? null}
+      onSignOutSideEffect={async () => {
+        // Only attempt disconnect if a wallet is actually connected,
+        // otherwise dapp-kit's mutation throws "no wallet connected".
+        if (account) {
+          await disconnectWallet()
+        }
+      }}
+    >
       {children}
     </AuthProvider>
   )

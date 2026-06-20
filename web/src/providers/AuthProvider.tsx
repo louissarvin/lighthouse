@@ -43,9 +43,22 @@ interface AuthProviderProps {
   children: React.ReactNode
   /** Injected by the parent tree when SuiEnokiProvider is mounted. */
   enokiAddress?: string | null
+  /**
+   * Side-effect to run during signOut, after the backend cookie is cleared
+   * and before query cache invalidation. The bridge that wraps this provider
+   * passes dapp-kit's `disconnectWallet()` here so the Enoki ephemeral key
+   * is removed from IndexedDB on every sign-out — otherwise the signing key
+   * persists across sign-outs and the next user on the same device could
+   * sign transactions as the previous user.
+   */
+  onSignOutSideEffect?: () => Promise<void> | void
 }
 
-export function AuthProvider({ children, enokiAddress = null }: AuthProviderProps) {
+export function AuthProvider({
+  children,
+  enokiAddress = null,
+  onSignOutSideEffect,
+}: AuthProviderProps) {
   const qc = useQueryClient()
 
   const { data, isLoading } = useQuery<ProfileMe | null>({
@@ -79,12 +92,21 @@ export function AuthProvider({ children, enokiAddress = null }: AuthProviderProp
       await apiFetch('/auth/web/logout', { method: 'POST', body: {} })
     } catch {
       // tolerate — cookie may already be missing
-    } finally {
-      setIsSigningOut(false)
     }
+    // Disconnect Enoki wallet (clears the ephemeral signing key from
+    // IndexedDB). Best-effort: if the bridge didn't pass this, we still
+    // proceed with cookie clear + cache invalidation.
+    if (onSignOutSideEffect) {
+      try {
+        await onSignOutSideEffect()
+      } catch (e) {
+        console.warn('[auth] enoki disconnect failed (cookie still cleared):', e)
+      }
+    }
+    setIsSigningOut(false)
     qc.setQueryData(QUERY_KEY, null)
     await qc.invalidateQueries({ queryKey: QUERY_KEY })
-  }, [qc])
+  }, [qc, onSignOutSideEffect])
 
   const value: AuthContextValue = useMemo(
     () => ({
