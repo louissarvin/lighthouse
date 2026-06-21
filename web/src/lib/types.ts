@@ -14,7 +14,7 @@ export interface ProfileMe {
   executorAgentId: string | null
   depositCapId: string | null
   memwalAccountId: string | null
-  predictManagerId?: string | null
+  predictManagerId: string | null
   suinsName?: string | null
   coachGroupUuid?: string | null
   auditGroupUuid?: string | null
