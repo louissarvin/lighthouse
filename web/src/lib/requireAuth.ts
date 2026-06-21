@@ -91,21 +91,51 @@ export async function requireMemWal(args: {
 }
 
 /**
+ * Like `requireAuth`, but also redirects to `/predict-setup` when the user
+ * has not yet created their PredictManager.
+ *
+ * Chains through `requireMemWal` first — so the gate order is always:
+ * auth → memwal → predict → destination.
+ *
+ * Do NOT use on /predict-setup itself — that would infinite-loop.
+ */
+export async function requirePredictManager(args: {
+  context: RouterContext
+  location: RouterLocation
+}): Promise<{ profile: ProfileMe }> {
+  const result = await requireMemWal(args)
+  if (!result.profile.predictManagerId) {
+    const search = args.location.search ?? {}
+    const nextRaw =
+      typeof search.next === 'string' &&
+      search.next.startsWith('/') &&
+      !search.next.startsWith('//')
+        ? search.next
+        : args.location.pathname
+    throw redirect({
+      to: '/predict-setup',
+      search: { next: nextRaw } as never,
+    })
+  }
+  return result
+}
+
+/**
  * Like `requireAuth`, but also redirects to `/setup` when the user has not
  * completed the risk profile questionnaire.
  *
- * Chains through `requireMemWal` first — so the gate order is always:
- * auth → memwal → risk profile → destination.
+ * Chains through `requirePredictManager` first — so the gate order is always:
+ * auth → memwal → predict → risk profile → destination.
  *
  * Use this on every protected route that requires risk setup (coach, predict,
- * trade). Do NOT use it on /setup or /memwal-setup — those must be reachable
- * before the respective step is finished.
+ * trade). Do NOT use it on /setup, /memwal-setup, or /predict-setup — those
+ * must be reachable before the respective step is finished.
  */
 export async function requireRiskSetup(args: {
   context: RouterContext
   location: RouterLocation
 }): Promise<{ profile: ProfileMe }> {
-  const result = await requireMemWal(args)
+  const result = await requirePredictManager(args)
   if (!result.profile.riskProfileCompletedAt) {
     const search = args.location.search ?? {}
     const nextRaw =
