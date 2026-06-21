@@ -200,12 +200,21 @@ export const agentRoutes: FastifyPluginCallback = (app: FastifyInstance, _opts, 
         if (!profile.balance_manager_id) return { available: false } as const;
         try {
           const rows = await getAllManagerBalances(profile.balance_manager_id);
-          const suiRaw = rows.find((r) => r.coin === 'SUI')?.balance ?? '0';
-          const dbusdcRaw = rows.find((r) => r.coin === 'DBUSDC')?.balance ?? '0';
+          // `getAllManagerBalances` (DeepBook SDK `checkManagerBalance`) returns
+          // HUMAN DECIMALS as strings (e.g. "2.1" SUI, "100.5" DBUSDC), NOT raw
+          // base units. Previously we wrapped these in BigInt which threw
+          // (`BigInt("2.1")` is a SyntaxError), so the whole BM section
+          // silently dropped to `available: false`. Format directly instead.
+          const suiHuman = rows.find((r) => r.coin === 'SUI')?.balance ?? '0';
+          const dbusdcHuman = rows.find((r) => r.coin === 'DBUSDC')?.balance ?? '0';
+          const fmt = (s: string): string => {
+            const n = Number(s);
+            return Number.isFinite(n) ? n.toFixed(6) : '0.000000';
+          };
           return {
             available: true as const,
-            sui: fromSuiRaw(BigInt(suiRaw)),
-            dbusdc: from6DecimalRaw(BigInt(dbusdcRaw)),
+            sui: fmt(suiHuman),
+            dbusdc: fmt(dbusdcHuman),
           };
         } catch (e) {
           console.warn(
