@@ -38,6 +38,7 @@ import {
   WEB_BASE_URL,
 } from '../config/main-config.ts';
 import { prismaQuery } from '../lib/prisma.ts';
+import { suiRpc } from '../lib/sui.ts';
 import { deriveSuiAddressFromJwt, exchangeGoogleCode } from '../lib/zklogin.ts';
 import {
   handleError,
@@ -150,6 +151,158 @@ export const oauthRoutes: FastifyPluginCallback = (app: FastifyInstance, _opts, 
             errUrl.searchParams.set('error', 'memwal_failed');
             errUrl.searchParams.set('detail', String(err.message ?? 'unknown error').slice(0, 240));
             return reply.code(302).redirect(errUrl.toString());
+          }
+        }
+
+        if (nonce.action === 'predict_setup' && result.traderProfileId && userJwt && nonce.zklogin_state) {
+          try {
+            const { setupPredictViaZkLogin } = await import('../services/PredictService.ts');
+            const r = await setupPredictViaZkLogin({
+              traderProfileId: result.traderProfileId,
+              jwt: userJwt,
+              zklState: nonce.zklogin_state as never,
+              // Web onboarding flow: create the PredictManager only; no DUSDC
+              // deposit here. The user funds via the predict page later.
+              // amountRaw defaults to 0n inside setupPredictViaZkLogin.
+            });
+            console.log(
+              `[oauth/web/predict_setup] success for ${suiAddress.slice(0, 10)}… ` +
+                `manager=${r.predictManagerId.slice(0, 10)}…`,
+            );
+          } catch (e) {
+            const err = e as Error;
+            console.error(
+              `[oauth/web/predict_setup] failed for ${suiAddress.slice(0, 10)}…`,
+              err,
+            );
+            const errorBase = nonce.web_redirect_uri ?? `${WEB_BASE_URL}/oauth-finish`;
+            const errUrl = new URL(errorBase);
+            errUrl.searchParams.set('error', 'predict_failed');
+            errUrl.searchParams.set('detail', String(err.message ?? 'unknown error').slice(0, 240));
+            return reply.code(302).redirect(errUrl.toString());
+          }
+        }
+
+        // ─── Wallet → BalanceManager sweep (user already has SUI in wallet) ─
+        // The auto-sweep worker cannot move SUI owned by the user's bound
+        // zkLogin address — that would need the user's signature. This path
+        // signs as the user via zkLogin and deposits straight into the BM.
+        // Leaves a small reserve so the address keeps a non-zero balance for
+        // any future unsponsored ops the user might need.
+        if (nonce.action === 'sweep_to_bm' && result.traderProfileId && userJwt && nonce.zklogin_state) {
+          try {
+            const rpc = suiRpc as unknown as {
+              getBalance: (args: { owner: string; coinType?: string }) => Promise<{ totalBalance: string }>;
+            };
+            const bal = await rpc.getBalance({ owner: suiAddress });
+            const totalMist = BigInt(bal.totalBalance);
+            const RESERVE_MIST = 50_000_000n; // 0.05 SUI
+            if (totalMist <= RESERVE_MIST) {
+              const errorBase = nonce.web_redirect_uri ?? `${WEB_BASE_URL}/oauth-finish`;
+              const errUrl = new URL(errorBase);
+              errUrl.searchParams.set('error', 'sweep_failed');
+              errUrl.searchParams.set(
+                'detail',
+                `wallet balance ${totalMist} MIST is below reserve ${RESERVE_MIST}`,
+              );
+              return reply.code(302).redirect(errUrl.toString());
+            }
+            const sweepAmount = totalMist - RESERVE_MIST;
+
+            const { depositViaZkLogin } = await import('../services/DepositService.ts');
+            const r = await depositViaZkLogin({
+              traderProfileId: result.traderProfileId,
+              jwt: userJwt,
+              zklState: nonce.zklogin_state as never,
+              amountMist: sweepAmount,
+            });
+            console.log(
+              `[oauth/web/sweep_to_bm] swept ${sweepAmount} MIST for ${suiAddress.slice(0, 10)}…, digest=${r.digest.slice(0, 10)}…`,
+            );
+          } catch (e) {
+            const err = e as Error;
+            console.error(`[oauth/web/sweep_to_bm] failed for ${suiAddress.slice(0, 10)}…`, err);
+            const errorBase = nonce.web_redirect_uri ?? `${WEB_BASE_URL}/oauth-finish`;
+            const errUrl = new URL(errorBase);
+            errUrl.searchParams.set('error', 'sweep_failed');
+            errUrl.searchParams.set('detail', String(err.message ?? 'unknown error').slice(0, 240));
+            return reply.code(302).redirect(errUrl.toString());
+          }
+        }
+
+        // ─── Default web onboard: full stack bootstrap in one OAuth hop ──
+        // When the nonce has no targeted action (or action === 'onboard'),
+        // run BM+Agent+DepositCap, then PredictManager, then MemWal sequentially
+        // BEFORE minting the WebAuthHandoff token. Each step is wrapped in its
+        // own try/catch so a single failure doesn't abort the whole chain —
+        // the user can still complete missing pieces via /memwal-setup or
+        // /predict-setup later. All three services are idempotent (early-return
+        // if their respective IDs are already persisted on the TraderProfile).
+        //
+        // Same JWT + zklState are still valid until zklState.maxEpoch, so we
+        // can sequentially issue multiple PTBs in this one callback.
+        const isDefaultWebOnboard =
+          (!nonce.action || nonce.action === 'onboard') &&
+          result.traderProfileId &&
+          userJwt &&
+          nonce.zklogin_state;
+        if (isDefaultWebOnboard) {
+          // 1. BalanceManager + ExecutorAgent + DepositCap
+          try {
+            const { setupUserTrading } = await import('../services/SetupTrading.ts');
+            const r = await setupUserTrading({
+              traderProfileId: result.traderProfileId!,
+              jwt: userJwt!,
+              zklState: nonce.zklogin_state as never,
+            });
+            console.log(
+              `[oauth/web/onboard] auto-setup-trading for ${suiAddress.slice(0, 10)}…: ` +
+                `BM=${r.balanceManagerId.slice(0, 10)}… Agent=${r.executorAgentId.slice(0, 10)}… ` +
+                `skipped=${r.skipped}`,
+            );
+          } catch (e) {
+            console.warn(
+              `[oauth/web/onboard] auto-setup-trading FAILED for ${suiAddress.slice(0, 10)}… (non-fatal):`,
+              (e as Error).message,
+            );
+          }
+
+          // 2. PredictManager (no DUSDC deposit, just creation)
+          try {
+            const { setupPredictViaZkLogin } = await import('../services/PredictService.ts');
+            const pr = await setupPredictViaZkLogin({
+              traderProfileId: result.traderProfileId!,
+              jwt: userJwt!,
+              zklState: nonce.zklogin_state as never,
+            });
+            console.log(
+              `[oauth/web/onboard] PredictManager ready for ${suiAddress.slice(0, 10)}…: ` +
+                `manager=${pr.predictManagerId.slice(0, 10)}… digest=${pr.digest.slice(0, 12)}…`,
+            );
+          } catch (e) {
+            console.warn(
+              `[oauth/web/onboard] predict setup FAILED for ${suiAddress.slice(0, 10)}… (non-fatal):`,
+              (e as Error).message,
+            );
+          }
+
+          // 3. MemWal account + delegate key (coach-paid gas inside the service)
+          try {
+            const { bootstrapMemWalViaZkLogin } = await import('../services/MemWalBootstrap.ts');
+            const mr = await bootstrapMemWalViaZkLogin({
+              profileId: result.traderProfileId!,
+              jwt: userJwt!,
+              zklState: nonce.zklogin_state as never,
+            });
+            console.log(
+              `[oauth/web/onboard] MemWal ready for ${suiAddress.slice(0, 10)}…: ` +
+                `account=${mr.accountId.slice(0, 10)}…`,
+            );
+          } catch (e) {
+            console.warn(
+              `[oauth/web/onboard] memwal bootstrap FAILED for ${suiAddress.slice(0, 10)}… (non-fatal):`,
+              (e as Error).message,
+            );
           }
         }
 
@@ -699,6 +852,80 @@ export const oauthRoutes: FastifyPluginCallback = (app: FastifyInstance, _opts, 
         });
       }
 
+      // ─── Telegram /sweep: move bound-wallet SUI into the BM ──────────────
+      // Same logic as the web origin sweep_to_bm branch: read total SUI at the
+      // user's bound zkLogin address, leave a 0.05 SUI reserve, deposit the
+      // rest into the BM via DepositService.depositViaZkLogin. Uses the same
+      // HTML success/failure page as /deposit so the user gets the
+      // tg://-deeplink bounce back to the bot.
+      if (action === 'sweep_to_bm') {
+        let depositOutcome: { ok: true; digest: string; amountMist: bigint }
+          | { ok: false; message: string }
+          | null = null;
+        if (userJwt && nonce.zklogin_state && nonce.action_meta) {
+          try {
+            const meta = nonce.action_meta as { traderProfileId?: string };
+            if (!meta.traderProfileId) {
+              throw new Error('sweep_to_bm action_meta missing traderProfileId');
+            }
+            const rpc = suiRpc as unknown as {
+              getBalance: (a: { owner: string; coinType?: string }) => Promise<{ totalBalance: string }>;
+            };
+            const bal = await rpc.getBalance({ owner: suiAddress });
+            const totalMist = BigInt(bal.totalBalance);
+            const RESERVE_MIST = 50_000_000n; // 0.05 SUI
+            if (totalMist <= RESERVE_MIST) {
+              throw new Error(
+                `wallet balance ${totalMist} MIST is below reserve ${RESERVE_MIST}`,
+              );
+            }
+            const sweepAmount = totalMist - RESERVE_MIST;
+            const { depositViaZkLogin } = await import('../services/DepositService.ts');
+            const r = await depositViaZkLogin({
+              traderProfileId: meta.traderProfileId,
+              jwt: userJwt,
+              zklState: nonce.zklogin_state as never,
+              amountMist: sweepAmount,
+            });
+            depositOutcome = { ok: true, digest: r.digest, amountMist: sweepAmount };
+            console.log(
+              `[oauth/sweep_to_bm] swept ${sweepAmount} MIST for ${suiAddress.slice(0, 10)}…, digest=${r.digest.slice(0, 10)}…`,
+            );
+          } catch (e) {
+            const err = e as Error & { cause?: Error; errors?: { code?: string; message?: string }[] };
+            const cause = err.cause?.message ?? '';
+            const enokiErrors = err.errors?.map((x) => `${x.code}: ${x.message}`).join('; ') ?? '';
+            const detail = enokiErrors || cause || err.message || 'unknown error';
+            depositOutcome = { ok: false, message: detail };
+            console.error(`[oauth/sweep_to_bm] failed for ${suiAddress.slice(0, 10)}…`, err);
+          }
+        } else {
+          depositOutcome = {
+            ok: false,
+            message: 'Missing JWT, zklogin state, or action_meta on nonce',
+          };
+        }
+
+        if (botUsername) {
+          const tgDeep = `tg://resolve?domain=${botUsername}&start=zklogin_done_${q.state}`;
+          const tgWeb = `https://t.me/${botUsername}?start=zklogin_done_${q.state}`;
+          const html = renderDepositHtml({
+            outcome: depositOutcome,
+            botUsername,
+            tgDeep,
+            tgWeb,
+          });
+          return reply.code(200).type('text/html; charset=utf-8').send(html);
+        }
+        return reply.code(200).send({
+          success: depositOutcome?.ok === true,
+          error: depositOutcome?.ok === false
+            ? { code: 'SWEEP_FAILED', message: depositOutcome.message }
+            : null,
+          data: depositOutcome?.ok ? { digest: depositOutcome.digest } : null,
+        });
+      }
+
       if (action === 'deposit') {
         let depositOutcome: { ok: true; digest: string; amountMist: bigint }
           | { ok: false; message: string }
@@ -801,6 +1028,55 @@ export const oauthRoutes: FastifyPluginCallback = (app: FastifyInstance, _opts, 
         }
       }
       void setupSummary; // surfaced in the HTML page below
+
+      // ─── Chain: PredictManager bootstrap (sequential, non-fatal) ────────
+      // Same JWT + zklState are still valid until maxEpoch, so we can issue a
+      // second PTB in the same callback. Idempotent: setupPredictViaZkLogin
+      // early-returns if predict_manager_id is already on the profile.
+      if (userJwt && nonce.zklogin_state && result.traderProfileId) {
+        try {
+          const { setupPredictViaZkLogin } = await import('../services/PredictService.ts');
+          const pr = await setupPredictViaZkLogin({
+            traderProfileId: result.traderProfileId,
+            jwt: userJwt,
+            zklState: nonce.zklogin_state as never,
+            // No amountRaw → service creates manager only, no DUSDC deposit.
+          });
+          console.log(
+            `[oauth/onboard] PredictManager ready for ${suiAddress.slice(0, 10)}…: ` +
+              `manager=${pr.predictManagerId.slice(0, 10)}… digest=${pr.digest.slice(0, 12)}…`,
+          );
+        } catch (e) {
+          console.warn(
+            `[oauth/onboard] predict setup FAILED for ${suiAddress.slice(0, 10)}… (non-fatal):`,
+            (e as Error).message,
+          );
+        }
+      }
+
+      // ─── Chain: MemWal bootstrap (sequential, non-fatal) ────────────────
+      // Coach-paid gas via the bootstrapMemWalViaZkLogin signing path.
+      // Idempotent: early-returns if memwal_account_id is already on the profile.
+      if (userJwt && nonce.zklogin_state && result.traderProfileId) {
+        try {
+          const { bootstrapMemWalViaZkLogin } = await import('../services/MemWalBootstrap.ts');
+          const mr = await bootstrapMemWalViaZkLogin({
+            profileId: result.traderProfileId,
+            jwt: userJwt,
+            zklState: nonce.zklogin_state as never,
+          });
+          console.log(
+            `[oauth/onboard] MemWal ready for ${suiAddress.slice(0, 10)}…: ` +
+              `account=${mr.accountId.slice(0, 10)}…`,
+          );
+        } catch (e) {
+          console.warn(
+            `[oauth/onboard] memwal bootstrap FAILED for ${suiAddress.slice(0, 10)}… (non-fatal):`,
+            (e as Error).message,
+          );
+        }
+      }
+
       if (botUsername) {
         // Serve an HTML page that tries the `tg://` native deep link first
         // (works on Telegram desktop + mobile, preserves the `?start=`

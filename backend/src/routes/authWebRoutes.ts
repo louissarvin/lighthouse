@@ -101,7 +101,7 @@ export const authWebRoutes: FastifyPluginCallback = (
     // web origin is actually wired to dispatch on /oauth/callback. The
     // callback handler also re-validates per-action; this is a defence-in-depth
     // boundary check so we don't persist nonces with garbage `action` values.
-    const WEB_ALLOWED_ACTIONS = ['memwal_setup'] as const;
+    const WEB_ALLOWED_ACTIONS = ['memwal_setup', 'predict_setup', 'sweep_to_bm'] as const;
     type WebAllowedAction = (typeof WEB_ALLOWED_ACTIONS)[number];
 
     let action: WebAllowedAction | undefined;
@@ -145,10 +145,15 @@ export const authWebRoutes: FastifyPluginCallback = (
       const url = new URL(`${WEB_BASE_URL}/oauth-finish`);
       url.searchParams.set('next', nextPath);
 
-      // memwal_setup runs two on-chain PTBs inside the callback; give the user
-      // a longer window to complete Google OAuth before the nonce expires.
-      // Mirrors the telegram /memwal flow (10-min TTL).
-      const ttlMs = action === 'memwal_setup' ? 10 * 60 * 1000 : undefined;
+      // memwal_setup, predict_setup, and sweep_to_bm each run on-chain PTBs
+      // inside the callback; give the user a longer window to complete Google
+      // OAuth before the nonce expires. Mirrors the telegram /memwal flow.
+      const ttlMs =
+        action === 'memwal_setup' ||
+        action === 'predict_setup' ||
+        action === 'sweep_to_bm'
+          ? 10 * 60 * 1000
+          : undefined;
 
       const flow = await buildWebOAuthFlow({
         webRedirectUri: url.toString(),
