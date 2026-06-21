@@ -50,6 +50,8 @@ interface OAuthFinishSearch {
   handoff?: string
   addr?: string
   next?: string
+  error?: string
+  detail?: string
 }
 
 export const Route = createFileRoute('/oauth-finish')({
@@ -60,6 +62,8 @@ export const Route = createFileRoute('/oauth-finish')({
       typeof search.next === 'string' && search.next.startsWith('/')
         ? search.next
         : undefined,
+    error: typeof search.error === 'string' ? search.error : undefined,
+    detail: typeof search.detail === 'string' ? search.detail : undefined,
   }),
   component: OAuthFinishPage,
   head: () => ({
@@ -74,14 +78,20 @@ function OAuthFinishPage() {
   const search = useSearch({ from: '/oauth-finish' })
   const navigate = useNavigate()
   const { refresh } = useAuth()
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(
+    search.error
+      ? `MemWal bootstrap failed${search.detail ? `: ${search.detail}` : ''}`
+      : null,
+  )
   const [stage, setStage] = useState<'exchanging' | 'redirecting' | 'error'>(
-    'exchanging',
+    search.error ? 'error' : 'exchanging',
   )
 
   useEffect(() => {
     let cancelled = false
     async function run() {
+      // Backend-reported error (e.g. memwal_setup failure). Skip handoff exchange.
+      if (search.error) return
       if (!search.handoff) {
         setError('Missing handoff token. Please sign in again.')
         setStage('error')
@@ -122,7 +132,7 @@ function OAuthFinishPage() {
     return () => {
       cancelled = true
     }
-  }, [search.handoff, search.next, refresh, navigate])
+  }, [search.error, search.handoff, search.next, refresh, navigate])
 
   return (
     <main className="bg-lh-bg text-lh-text min-h-screen">
@@ -160,13 +170,13 @@ function OAuthFinishPage() {
             {stage === 'error' && (
               <>
                 <h1 className="text-3xl font-bold tracking-[-0.03em] mb-3">
-                  Sign-in failed
+                  {search.error ? 'Setup failed' : 'Sign-in failed'}
                 </h1>
                 <p className="text-lh-text-dim text-base mb-6">
                   {error ?? 'Unknown error during sign-in.'}
                 </p>
                 <a
-                  href="/auth"
+                  href={search.error ? '/memwal-setup' : '/auth'}
                   className="inline-flex items-center gap-2 rounded-full bg-lh-accent text-lh-bg font-semibold text-sm px-5 py-2.5"
                 >
                   Try again
