@@ -45,15 +45,38 @@ export async function bindTelegramToSuiAddress(args: BindArgs): Promise<BindResu
     include: { telegram: true },
   });
 
+  // The `TelegramUser` table is also used as a generic "surface binding"
+  // row for web-origin OAuth flows (synthetic hash prefix `web::<nanoid>`).
+  // For real telegram bindings (raw_hash, no prefix) we need to ignore any
+  // synthetic web-origin row so the same TraderProfile can host both a web
+  // session AND a real telegram binding for the same Sui address.
+  const isIncomingTelegram = !args.telegramUserIdHash.startsWith('web::');
+
   if (existing) {
-    // Attach Telegram if not already.
+    const existingIsWebPlaceholder =
+      existing.telegram?.telegram_user_id_hash.startsWith('web::') ?? false;
+
     if (!existing.telegram) {
+      // No binding row yet — create one for this surface.
       await prismaQuery.telegramUser.create({
         data: {
           telegram_user_id_hash: args.telegramUserIdHash,
           telegram_chat_id: args.telegramChatId ? BigInt(args.telegramChatId) : null,
           telegram_username: args.telegramUsername ?? null,
           trader_profile_id: existing.id,
+        },
+      });
+    } else if (isIncomingTelegram && existingIsWebPlaceholder) {
+      // Real telegram binding incoming, but the row is currently a web
+      // placeholder. Promote the row to the real telegram identity in place
+      // (the `trader_profile_id @unique` constraint prevents inserting a
+      // second row for this profile, so we update the existing row).
+      await prismaQuery.telegramUser.update({
+        where: { id: existing.telegram.id },
+        data: {
+          telegram_user_id_hash: args.telegramUserIdHash,
+          telegram_chat_id: args.telegramChatId ? BigInt(args.telegramChatId) : null,
+          telegram_username: args.telegramUsername ?? null,
         },
       });
     } else if (args.telegramChatId && !existing.telegram.telegram_chat_id) {
