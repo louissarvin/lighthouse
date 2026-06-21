@@ -14,6 +14,7 @@ import { Route as TermsRouteImport } from './routes/terms'
 import { Route as SetupRouteImport } from './routes/setup'
 import { Route as ProtocolRouteImport } from './routes/protocol'
 import { Route as PrivacyRouteImport } from './routes/privacy'
+import { Route as PredictSetupRouteImport } from './routes/predict-setup'
 import { Route as PredictRouteImport } from './routes/predict'
 import { Route as PortfolioRouteImport } from './routes/portfolio'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
@@ -53,6 +54,11 @@ const ProtocolRoute = ProtocolRouteImport.update({
 const PrivacyRoute = PrivacyRouteImport.update({
   id: '/privacy',
   path: '/privacy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PredictSetupRoute = PredictSetupRouteImport.update({
+  id: '/predict-setup',
+  path: '/predict-setup',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PredictRoute = PredictRouteImport.update({
@@ -141,6 +147,7 @@ export interface FileRoutesByFullPath {
   '/onboarding': typeof OnboardingRoute
   '/portfolio': typeof PortfolioRoute
   '/predict': typeof PredictRoute
+  '/predict-setup': typeof PredictSetupRoute
   '/privacy': typeof PrivacyRoute
   '/protocol': typeof ProtocolRoute
   '/setup': typeof SetupRoute
@@ -163,6 +170,7 @@ export interface FileRoutesByTo {
   '/onboarding': typeof OnboardingRoute
   '/portfolio': typeof PortfolioRoute
   '/predict': typeof PredictRoute
+  '/predict-setup': typeof PredictSetupRoute
   '/privacy': typeof PrivacyRoute
   '/protocol': typeof ProtocolRoute
   '/setup': typeof SetupRoute
@@ -186,6 +194,7 @@ export interface FileRoutesById {
   '/onboarding': typeof OnboardingRoute
   '/portfolio': typeof PortfolioRoute
   '/predict': typeof PredictRoute
+  '/predict-setup': typeof PredictSetupRoute
   '/privacy': typeof PrivacyRoute
   '/protocol': typeof ProtocolRoute
   '/setup': typeof SetupRoute
@@ -210,6 +219,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/portfolio'
     | '/predict'
+    | '/predict-setup'
     | '/privacy'
     | '/protocol'
     | '/setup'
@@ -232,6 +242,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/portfolio'
     | '/predict'
+    | '/predict-setup'
     | '/privacy'
     | '/protocol'
     | '/setup'
@@ -254,6 +265,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/portfolio'
     | '/predict'
+    | '/predict-setup'
     | '/privacy'
     | '/protocol'
     | '/setup'
@@ -277,6 +289,7 @@ export interface RootRouteChildren {
   OnboardingRoute: typeof OnboardingRoute
   PortfolioRoute: typeof PortfolioRoute
   PredictRoute: typeof PredictRoute
+  PredictSetupRoute: typeof PredictSetupRoute
   PrivacyRoute: typeof PrivacyRoute
   ProtocolRoute: typeof ProtocolRoute
   SetupRoute: typeof SetupRoute
@@ -324,6 +337,13 @@ declare module '@tanstack/react-router' {
       path: '/privacy'
       fullPath: '/privacy'
       preLoaderRoute: typeof PrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/predict-setup': {
+      id: '/predict-setup'
+      path: '/predict-setup'
+      fullPath: '/predict-setup'
+      preLoaderRoute: typeof PredictSetupRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/predict': {
@@ -454,6 +474,7 @@ const rootRouteChildren: RootRouteChildren = {
   OnboardingRoute: OnboardingRoute,
   PortfolioRoute: PortfolioRoute,
   PredictRoute: PredictRoute,
+  PredictSetupRoute: PredictSetupRoute,
   PrivacyRoute: PrivacyRoute,
   ProtocolRoute: ProtocolRoute,
   SetupRoute: SetupRoute,
