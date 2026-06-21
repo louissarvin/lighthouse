@@ -238,6 +238,7 @@ function registerHandlers(bot: Bot): void {
   bot.command('trade', tradeCommand);
   bot.command('deposit', depositCommand);
   bot.command('sweep', sweepCommand);
+  bot.command('topup', topupCommand);
   bot.command('predict', predictCommand);
   bot.command('positions', positionsCommand);
   bot.command('setup', setupCommand);
@@ -316,6 +317,7 @@ function registerHandlers(bot: Bot): void {
     { command: 'trade',      description: 'Place a DeepBook limit order' },
     { command: 'deposit',    description: 'Deposit SUI into your BalanceManager' },
     { command: 'sweep',      description: 'Move SUI from your wallet to your BalanceManager' },
+    { command: 'topup',      description: 'Top up DUSDC to your PredictManager' },
     { command: 'revoke',     description: 'Revoke an agent, key, or session' },
     { command: 'logout',     description: 'Disconnect this telegram from your Sui address (assets stay safe)' },
   ]).catch((e: unknown) => console.warn('[bot] setMyCommands failed:', (e as Error).message));
@@ -507,6 +509,7 @@ async function helpCommand(ctx: Context): Promise<void> {
     `━━━ 🎯 *Predict* ━━━\n` +
     `/predict — Live BTC binary option markets\n` +
     `/positions — Open, won, lost & claimed bets\n` +
+    `/topup <amount> — Top up DUSDC into your PredictManager (for predictions)\n` +
     `/pnl — Win rate & prediction P&L\n\n` +
     `━━━ 🏦 *Trading* ━━━\n` +
     `/trade — Place a DeepBook limit order\n` +
@@ -2241,6 +2244,111 @@ async function sweepCommand(ctx: Context): Promise<void> {
     `💸 Move *${sweepDisplay} SUI* from your wallet → BalanceManager.\n\n` +
       `Tap to sign in with Google (one-shot, ~10s). We'll leave 0.05 SUI ` +
       `in your wallet as a reserve.`,
+    { parse_mode: 'Markdown', reply_markup: kb },
+  );
+}
+
+// ── /topup — move DUSDC from the user's bound zkLogin wallet into their ──────
+// PredictManager via an OAuth roundtrip. Mirrors /sweep exactly but operates
+// on DUSDC → PredictManager instead of SUI → BalanceManager.
+//
+// Prerequisite: profile.predict_manager_id must already exist (the user must
+// have completed Phase 1 of /predict at least once). This command is purely
+// for *additional* funding — Phase 1 setup remains in /predict.
+//
+// Defaults: 50 DUSDC. Minimum: 1 DUSDC. Reject larger-than-wallet up-front.
+async function topupCommand(ctx: Context): Promise<void> {
+  const profile = await loadProfile(ctx);
+  if (!profile) return;
+  if (!profile.predict_manager_id) {
+    await ctx.reply(
+      "Your PredictManager isn't set up yet — run /predict first to create " +
+        'and fund it with your initial DUSDC deposit.',
+    );
+    return;
+  }
+
+  // tgHash needed for buildTelegramOAuthFlow — derive from the message sender.
+  if (!ctx.from?.id) {
+    await ctx.reply('Could not identify user.');
+    return;
+  }
+  const tgHash = hashTelegramUserId(ctx.from.id);
+
+  // ── Parse the amount argument (defaults to 50 DUSDC). ──────────────────────
+  const args = ctx.message?.text?.split(/\s+/).slice(1) ?? [];
+  const amountStr = args[0];
+  const humanAmount = amountStr ? parseFloat(amountStr) : 50;
+  if (!Number.isFinite(humanAmount) || humanAmount < 1) {
+    await ctx.reply('Invalid amount. Minimum is 1 DUSDC.\nExample: /topup 25');
+    return;
+  }
+  // DUSDC has 6 decimals on testnet.
+  const amountRaw = BigInt(Math.floor(humanAmount * 1_000_000));
+  if (amountRaw <= 0n) {
+    await ctx.reply('Invalid amount. Minimum is 1 DUSDC.');
+    return;
+  }
+  const amountDisplay = humanAmount.toLocaleString(undefined, { maximumFractionDigits: 6 });
+
+  // ── Verify the bound wallet holds enough DUSDC up-front. ───────────────────
+  // Without this check the OAuth flow would still trigger and only fail inside
+  // depositDusdcIntoExistingManager when no coin >= amountRaw is found — that
+  // wastes a Google round-trip and shows a generic error page.
+  let walletRawDusdc: bigint;
+  try {
+    const rpc = suiRpc as unknown as {
+      getBalance: (a: { owner: string; coinType?: string }) => Promise<{ totalBalance: string }>;
+    };
+    const bal = await rpc.getBalance({ owner: profile.sui_address, coinType: DUSDC_TYPE_TAG });
+    walletRawDusdc = BigInt(bal.totalBalance);
+  } catch (e) {
+    console.error('[bot/topup] getBalance failed:', e);
+    await ctx.reply(
+      'Could not reach the Sui RPC to check your wallet DUSDC balance. Please try again in a moment.',
+    );
+    return;
+  }
+
+  if (walletRawDusdc < amountRaw) {
+    const haveHuman = (Number(walletRawDusdc) / 1e6).toFixed(2);
+    await ctx.reply(
+      `⚠️ You have *${haveHuman} DUSDC* in your wallet but tried to top up ` +
+        `*${amountDisplay} DUSDC*.\n\n` +
+        `Send more DUSDC to your bound address:\n\n` +
+        `\`${profile.sui_address}\`\n\n` +
+        `Then run /topup ${amountDisplay} again.`,
+      { parse_mode: 'Markdown' },
+    );
+    return;
+  }
+
+  // ── Build the OAuth flow. action=predict_setup, amountRaw routed via meta ──
+  // The OAuth callback's predict_setup branch calls setupPredictViaZkLogin,
+  // which sees the existing predict_manager_id and routes through the
+  // top-up branch (skips create_manager, runs only the deposit PTB).
+  let oauthUrl: string;
+  try {
+    const flow = await buildTelegramOAuthFlow(tgHash, {
+      action: 'predict_setup',
+      action_meta: {
+        traderProfileId: profile.id,
+        amountRaw: amountRaw.toString(),
+      },
+      ttlMs: 10 * 60 * 1000,
+    });
+    oauthUrl = flow.oauthUrl;
+  } catch (e) {
+    console.error('[bot/topup] OAuth build failed:', e);
+    await ctx.reply('Could not generate sign-in link. Please try again or contact support.');
+    return;
+  }
+
+  const kb = new InlineKeyboard().url('🔐 Sign in with Google', oauthUrl);
+  await ctx.reply(
+    `💰 Top up *${amountDisplay} DUSDC* → PredictManager\n\n` +
+      `Tap to sign in with Google (one-shot, ~5s):\n\n` +
+      `_DUSDC moves from your wallet → PredictManager. Sponsored, no gas._`,
     { parse_mode: 'Markdown', reply_markup: kb },
   );
 }
