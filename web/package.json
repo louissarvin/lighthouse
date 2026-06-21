@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite dev --port 3200",
+    "dev": "vite dev --port 3201 --strictPort",
     "build": "vite build",
     "build:walrus": "WALRUS_SPA=1 vite build",
     "preview": "vite preview",

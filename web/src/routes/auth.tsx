@@ -54,15 +54,33 @@ function AuthPage() {
     try {
       // 1. Trigger Enoki connect first (opens a popup for Google OAuth and
       //    persists the ephemeral key in IndexedDB). Must happen on the user
-      //    gesture to avoid popup blockers.
-      if (enokiGoogleWallet) {
-        try {
-          await connectWallet({ wallet: enokiGoogleWallet })
-        } catch (enokiErr) {
-          // Log but don't block the cookie flow — user may still authed for
-          // read-only pages, and the error will surface on the next sign action.
-          console.warn('[enoki] Connect failed:', enokiErr)
-        }
+      //    gesture to avoid popup blockers. We HARD-FAIL if this errors —
+      //    without an Enoki session the user can't sign any sponsored tx, and
+      //    silent failure here leaves them stranded on /memwal-setup or /predict
+      //    later with a cryptic "wallet not connected" message.
+      if (!enokiGoogleWallet) {
+        throw new Error(
+          'Enoki wallet not registered. Check VITE_ENOKI_PUBLIC_KEY in web/.env ' +
+            'and Allowed Origins in the Enoki Portal include ' +
+            window.location.origin +
+            '.',
+        )
+      }
+      try {
+        await connectWallet({ wallet: enokiGoogleWallet })
+      } catch (enokiErr) {
+        const msg = (enokiErr as Error).message ?? String(enokiErr)
+        throw new Error(
+          'Enoki sign-in failed: ' +
+            msg +
+            '. Most common cause: ' +
+            window.location.origin +
+            '/oauth-finish is not in your Google OAuth client\'s ' +
+            'authorized redirect URIs, or ' +
+            window.location.origin +
+            ' is not in your Enoki Portal Allowed Origins. Open browser ' +
+            'console for details.',
+        )
       }
 
       // 2. Start the backend cookie flow (redirects to Google OAuth for lh_jwt).
