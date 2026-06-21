@@ -51,6 +51,23 @@ function AuthPage() {
   async function startGoogle() {
     setError(null)
     setPending(true)
+    // ── DIAGNOSTIC: log every registered wallet so we can see what's there.
+    // Remove once the onboarding flow is verified working.
+    // eslint-disable-next-line no-console
+    console.log(
+      '[auth] wallets visible to dapp-kit at click time:',
+      wallets.map((w) => ({
+        name: w.name,
+        isEnoki: isEnokiWallet(w),
+        provider: isEnokiWallet(w) ? w.provider : undefined,
+      })),
+    )
+    // eslint-disable-next-line no-console
+    console.log('[auth] env at runtime:', {
+      enokiPublicKey: !!import.meta.env.VITE_ENOKI_PUBLIC_KEY,
+      googleClientId: !!import.meta.env.VITE_GOOGLE_CLIENT_ID,
+      origin: window.location.origin,
+    })
     try {
       // 1. Trigger Enoki connect first (opens a popup for Google OAuth and
       //    persists the ephemeral key in IndexedDB). Must happen on the user
@@ -63,7 +80,7 @@ function AuthPage() {
           'Enoki wallet not registered. Check VITE_ENOKI_PUBLIC_KEY in web/.env ' +
             'and Allowed Origins in the Enoki Portal include ' +
             window.location.origin +
-            '.',
+            '. See browser console for wallet list.',
         )
       }
       try {
