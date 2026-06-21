@@ -108,7 +108,9 @@ export interface PredictSetupArgs {
   jwt: string;
   zklState: ZkLoginNonceState;
   /// DUSDC raw units to deposit (DUSDC has 6 decimals — 50 DUSDC = 50_000_000).
-  amountRaw: bigint;
+  /// Optional: when undefined or 0n the deposit phase is skipped and only the
+  /// PredictManager is created (web onboarding flow — user funds separately).
+  amountRaw?: bigint;
 }
 
 export interface PredictSetupResult {
@@ -128,8 +130,10 @@ export async function setupPredictViaZkLogin(
   if (!PREDICT_PACKAGE_ID) {
     throw new Error('[predict-setup] PREDICT_PACKAGE_ID missing in env');
   }
-  if (args.amountRaw <= 0n) {
-    throw new Error('[predict-setup] amountRaw must be positive');
+
+  const depositAmount = args.amountRaw ?? 0n;
+  if (depositAmount < 0n) {
+    throw new Error('[predict-setup] amountRaw must be non-negative');
   }
 
   const profile = await prismaQuery.traderProfile.findUnique({
@@ -140,69 +144,78 @@ export async function setupPredictViaZkLogin(
       `[predict-setup] TraderProfile ${args.traderProfileId} not found`,
     );
   }
+
+  // Idempotency: if the manager is already set return immediately without
+  // touching the chain. Both the web flow and the Telegram flow call this;
+  // retries or double-triggers must be safe.
   if (profile.predict_manager_id) {
-    throw new Error(
-      `[predict-setup] Predict already set up (manager=${profile.predict_manager_id})`,
+    console.log(
+      `[predict-setup] already set up for profile=${profile.id} manager=${profile.predict_manager_id.slice(0, 10)}… — returning early`,
     );
+    return { digest: 'already-set-up', predictManagerId: profile.predict_manager_id };
   }
 
   const userAddress = profile.sui_address;
 
-  // ── Phase 1: Find a DUSDC coin at the user's address ─────────────────────
-  // Same pattern as DepositService: getOwnedObjects with StructType filter.
-  const ownedRpc = suiRpc as unknown as {
-    getOwnedObjects: (params: {
-      owner: string;
-      filter?: { StructType?: string };
-      options?: { showContent?: boolean };
-    }) => Promise<{
-      data?: Array<{
-        data?: {
-          objectId?: string;
-          version?: string;
-          digest?: string;
-          content?: { fields?: { balance?: string } };
-        };
+  // ── Phase 1 (conditional): Find a DUSDC coin for the initial deposit ──────
+  // Skipped when depositAmount is 0n (web onboarding — user funds later via
+  // the predict page's deposit flow).
+  let coin: { coinObjectId: string; version: string; digest: string } | null = null;
+  if (depositAmount > 0n) {
+    const ownedRpc = suiRpc as unknown as {
+      getOwnedObjects: (params: {
+        owner: string;
+        filter?: { StructType?: string };
+        options?: { showContent?: boolean };
+      }) => Promise<{
+        data?: Array<{
+          data?: {
+            objectId?: string;
+            version?: string;
+            digest?: string;
+            content?: { fields?: { balance?: string } };
+          };
+        }>;
       }>;
-    }>;
-  };
+    };
 
-  const dusdcStructType = `0x2::coin::Coin<${DUSDC_TYPE_TAG}>`;
-  const resp = await ownedRpc.getOwnedObjects({
-    owner: userAddress,
-    filter: { StructType: dusdcStructType },
-    options: { showContent: true },
-  });
-
-  const candidates = (resp.data ?? [])
-    .filter((c) => {
-      const bal = c.data?.content?.fields?.balance;
-      return (
-        !!c.data?.objectId &&
-        !!c.data?.version &&
-        !!c.data?.digest &&
-        bal != null &&
-        BigInt(bal) >= args.amountRaw
-      );
-    })
-    .sort((a, b) => {
-      const ba = BigInt(b.data?.content?.fields?.balance ?? '0');
-      const aa = BigInt(a.data?.content?.fields?.balance ?? '0');
-      return ba > aa ? 1 : ba < aa ? -1 : 0;
+    const dusdcStructType = `0x2::coin::Coin<${DUSDC_TYPE_TAG}>`;
+    const resp = await ownedRpc.getOwnedObjects({
+      owner: userAddress,
+      filter: { StructType: dusdcStructType },
+      options: { showContent: true },
     });
 
-  const coinEntry = candidates[0]?.data;
-  if (!coinEntry?.objectId || !coinEntry.version || !coinEntry.digest) {
-    throw new Error(
-      `[predict-setup] No DUSDC coin with balance >= ${args.amountRaw.toString()} raw units found at ${userAddress}. ` +
-        `Send DUSDC to this address from your wallet first.`,
-    );
+    const candidates = (resp.data ?? [])
+      .filter((c) => {
+        const bal = c.data?.content?.fields?.balance;
+        return (
+          !!c.data?.objectId &&
+          !!c.data?.version &&
+          !!c.data?.digest &&
+          bal != null &&
+          BigInt(bal) >= depositAmount
+        );
+      })
+      .sort((a, b) => {
+        const ba = BigInt(b.data?.content?.fields?.balance ?? '0');
+        const aa = BigInt(a.data?.content?.fields?.balance ?? '0');
+        return ba > aa ? 1 : ba < aa ? -1 : 0;
+      });
+
+    const coinEntry = candidates[0]?.data;
+    if (!coinEntry?.objectId || !coinEntry.version || !coinEntry.digest) {
+      throw new Error(
+        `[predict-setup] No DUSDC coin with balance >= ${depositAmount.toString()} raw units found at ${userAddress}. ` +
+          `Send DUSDC to this address from your wallet first.`,
+      );
+    }
+    coin = {
+      coinObjectId: coinEntry.objectId,
+      version: coinEntry.version,
+      digest: coinEntry.digest,
+    };
   }
-  const coin = {
-    coinObjectId: coinEntry.objectId,
-    version: coinEntry.version,
-    digest: coinEntry.digest,
-  };
 
   // ── Phase 2: PTB #1 — predict::create_manager ────────────────────────────
   // The Move function returns ID by value but internally calls
@@ -286,38 +299,44 @@ export async function setupPredictViaZkLogin(
     );
   }
 
-  // ── Phase 5: PTB #2 — predict_manager::deposit<DUSDC>(manager, coin) ────
-  const depositTx = new Transaction();
-  depositTx.moveCall({
-    target: `${PREDICT_PACKAGE_ID}::predict_manager::deposit`,
-    typeArguments: [DUSDC_TYPE_TAG],
-    arguments: [
-      depositTx.sharedObjectRef({
-        objectId: predictManagerId,
-        initialSharedVersion: mgrInitialVersion,
-        mutable: true,
-      }),
-      depositTx.objectRef({
-        objectId: coin.coinObjectId,
-        version: coin.version,
-        digest: coin.digest,
-      }),
-    ],
-  });
-  depositTx.setSender(userAddress);
+  // ── Phase 5 (conditional): PTB #2 — predict_manager::deposit<DUSDC>(manager, coin) ──
+  // Skipped when no DUSDC coin was located (depositAmount = 0n / web flow).
+  // The caller's result.digest will be the create_manager tx in this case.
+  let finalDigest = createExec.digest;
+  if (coin !== null) {
+    const depositTx = new Transaction();
+    depositTx.moveCall({
+      target: `${PREDICT_PACKAGE_ID}::predict_manager::deposit`,
+      typeArguments: [DUSDC_TYPE_TAG],
+      arguments: [
+        depositTx.sharedObjectRef({
+          objectId: predictManagerId,
+          initialSharedVersion: mgrInitialVersion,
+          mutable: true,
+        }),
+        depositTx.objectRef({
+          objectId: coin.coinObjectId,
+          version: coin.version,
+          digest: coin.digest,
+        }),
+      ],
+    });
+    depositTx.setSender(userAddress);
 
-  const sponsoredDeposit = await sponsorForAddress(depositTx, userAddress);
-  const depositExec = await executeSponsoredAsZkLoginUser({
-    sponsored: sponsoredDeposit,
-    state: args.zklState,
-    jwt: args.jwt,
-  });
+    const sponsoredDeposit = await sponsorForAddress(depositTx, userAddress);
+    const depositExec = await executeSponsoredAsZkLoginUser({
+      sponsored: sponsoredDeposit,
+      state: args.zklState,
+      jwt: args.jwt,
+    });
 
-  // Verify deposit succeeded on-chain before saving the manager id. If the
-  // deposit aborts (e.g. coin was consumed in a concurrent tx) we throw here
-  // so the caller knows the manager is unfunded — they can retry the setup
-  // which will detect the existing manager id and skip creation.
-  await assertTxSuccess(depositExec.digest, '[predict-setup/deposit]', true);
+    // Verify deposit succeeded on-chain before saving the manager id. If the
+    // deposit aborts (e.g. coin was consumed in a concurrent tx) we throw here
+    // so the caller knows the manager is unfunded — they can retry the setup
+    // which will detect the existing manager id and skip creation.
+    await assertTxSuccess(depositExec.digest, '[predict-setup/deposit]', true);
+    finalDigest = depositExec.digest;
+  }
 
   // ── Phase 6: Persist predict_manager_id ─────────────────────────────────
   await prismaQuery.traderProfile.update({
@@ -328,11 +347,11 @@ export async function setupPredictViaZkLogin(
   console.log(
     `[predict-setup] OK profile=${profile.id} manager=${predictManagerId.slice(0, 10)}… ` +
       `createDigest=${createExec.digest.slice(0, 12)}… ` +
-      `depositDigest=${depositExec.digest.slice(0, 12)}…`,
+      (coin !== null ? `depositDigest=${finalDigest.slice(0, 12)}…` : 'deposit=skipped'),
   );
 
   return {
-    digest: depositExec.digest,
+    digest: finalDigest,
     predictManagerId,
   };
 }
