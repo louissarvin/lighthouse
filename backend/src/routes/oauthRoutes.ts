@@ -118,6 +118,41 @@ export const oauthRoutes: FastifyPluginCallback = (app: FastifyInstance, _opts, 
       // burns the token in exchange for an httpOnly session cookie. JWT NEVER
       // sits in the URL longer than one navigation hop.
       if (nonce.origin === 'web') {
+        // ─── Pre-handoff action dispatch (web origin) ─────────────────────
+        // Mirrors the telegram branch: if the nonce carries an `action`, we
+        // run the server-side bootstrap with the freshly-issued JWT BEFORE
+        // minting the WebAuthHandoff token. The web SPA can't reliably sign
+        // these PTBs client-side (Enoki path has reliability issues / MemWal
+        // package isn't on Enoki's allowlist), so the backend does it inline.
+        //
+        // bootstrapMemWalViaZkLogin is idempotent: if `memwal_account_id` is
+        // already set on the profile it early-returns without touching chain.
+        if (nonce.action === 'memwal_setup' && result.traderProfileId && userJwt && nonce.zklogin_state) {
+          try {
+            const { bootstrapMemWalViaZkLogin } = await import('../services/MemWalBootstrap.ts');
+            const r = await bootstrapMemWalViaZkLogin({
+              profileId: result.traderProfileId,
+              jwt: userJwt,
+              zklState: nonce.zklogin_state as never,
+            });
+            console.log(
+              `[oauth/web/memwal_setup] success for ${suiAddress.slice(0, 10)}… ` +
+                `account=${r.accountId.slice(0, 10)}…`,
+            );
+          } catch (e) {
+            const err = e as Error;
+            console.error(
+              `[oauth/web/memwal_setup] failed for ${suiAddress.slice(0, 10)}…`,
+              err,
+            );
+            const errorBase = nonce.web_redirect_uri ?? `${WEB_BASE_URL}/oauth-finish`;
+            const errUrl = new URL(errorBase);
+            errUrl.searchParams.set('error', 'memwal_failed');
+            errUrl.searchParams.set('detail', String(err.message ?? 'unknown error').slice(0, 240));
+            return reply.code(302).redirect(errUrl.toString());
+          }
+        }
+
         const token = jwt.sign(
           {
             sub: suiAddress,

@@ -97,12 +97,25 @@ export const authWebRoutes: FastifyPluginCallback = (
     const body = (request.body as StartBody | undefined) ?? {};
     const nextPath = typeof body.next === 'string' && body.next.startsWith('/') ? body.next : '/trade';
 
-    // Optional post-auth action. Validate light-touch — the callback handler
-    // owns the authoritative dispatch and re-validates per-action.
-    const action =
-      typeof body.action === 'string' && body.action.length > 0 && body.action.length <= 64
-        ? body.action
-        : undefined;
+    // Optional post-auth action. Validate against an allowlist of actions the
+    // web origin is actually wired to dispatch on /oauth/callback. The
+    // callback handler also re-validates per-action; this is a defence-in-depth
+    // boundary check so we don't persist nonces with garbage `action` values.
+    const WEB_ALLOWED_ACTIONS = ['memwal_setup'] as const;
+    type WebAllowedAction = (typeof WEB_ALLOWED_ACTIONS)[number];
+
+    let action: WebAllowedAction | undefined;
+    if (typeof body.action === 'string' && body.action.length > 0) {
+      if (!(WEB_ALLOWED_ACTIONS as readonly string[]).includes(body.action)) {
+        return handleError(
+          reply,
+          400,
+          `action must be one of: ${WEB_ALLOWED_ACTIONS.join(', ')}`,
+          'BAD_ACTION',
+        );
+      }
+      action = body.action as WebAllowedAction;
+    }
 
     // Build the action_meta JSON blob. We accept a free-form object from the
     // client and additionally fold in amountMist (string, BigInt-safe) when
@@ -132,10 +145,16 @@ export const authWebRoutes: FastifyPluginCallback = (
       const url = new URL(`${WEB_BASE_URL}/oauth-finish`);
       url.searchParams.set('next', nextPath);
 
+      // memwal_setup runs two on-chain PTBs inside the callback; give the user
+      // a longer window to complete Google OAuth before the nonce expires.
+      // Mirrors the telegram /memwal flow (10-min TTL).
+      const ttlMs = action === 'memwal_setup' ? 10 * 60 * 1000 : undefined;
+
       const flow = await buildWebOAuthFlow({
         webRedirectUri: url.toString(),
         action,
         actionMeta,
+        ttlMs,
       });
 
       return reply.code(200).send({
