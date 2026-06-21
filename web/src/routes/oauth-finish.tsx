@@ -78,11 +78,15 @@ function OAuthFinishPage() {
   const search = useSearch({ from: '/oauth-finish' })
   const navigate = useNavigate()
   const { refresh } = useAuth()
-  const [error, setError] = useState<string | null>(
-    search.error
-      ? `MemWal bootstrap failed${search.detail ? `: ${search.detail}` : ''}`
-      : null,
-  )
+  const errorLabel =
+    search.error === 'predict_failed'
+      ? `Predict setup failed${search.detail ? `: ${search.detail}` : ''}`
+      : search.error === 'sweep_failed'
+        ? `Wallet sweep failed${search.detail ? `: ${search.detail}` : ''}`
+        : search.error
+          ? `Setup failed${search.detail ? `: ${search.detail}` : ''}`
+          : null
+  const [error, setError] = useState<string | null>(errorLabel)
   const [stage, setStage] = useState<'exchanging' | 'redirecting' | 'error'>(
     search.error ? 'error' : 'exchanging',
   )
@@ -105,14 +109,31 @@ function OAuthFinishPage() {
         setStage('redirecting')
         const intendedNext = search.next ?? '/coach'
         // Route the user through any missing onboarding steps before landing
-        // on the intended destination. Order: memwal → risk profile → dest.
+        // on the intended destination.
+        // Chain order: memwal → predict → risk profile → destination.
         let next: string
-        if (!freshProfile?.memwalAccountId) {
-          const afterMemwal = !freshProfile?.riskProfileCompletedAt
+        const needsMemwal = !freshProfile?.memwalAccountId
+        const needsPredict = !freshProfile?.predictManagerId
+        const needsRisk = !freshProfile?.riskProfileCompletedAt
+
+        if (needsMemwal) {
+          // After memwal: still need predict? chain through it first.
+          const afterMemwal = needsPredict
+            ? `/predict-setup?next=${encodeURIComponent(
+                needsRisk
+                  ? `/setup?next=${encodeURIComponent(intendedNext)}`
+                  : intendedNext,
+              )}`
+            : needsRisk
+              ? `/setup?next=${encodeURIComponent(intendedNext)}`
+              : intendedNext
+          next = `/memwal-setup?next=${encodeURIComponent(afterMemwal)}`
+        } else if (needsPredict) {
+          const afterPredict = needsRisk
             ? `/setup?next=${encodeURIComponent(intendedNext)}`
             : intendedNext
-          next = `/memwal-setup?next=${encodeURIComponent(afterMemwal)}`
-        } else if (freshProfile && !freshProfile.riskProfileCompletedAt) {
+          next = `/predict-setup?next=${encodeURIComponent(afterPredict)}`
+        } else if (needsRisk) {
           next = `/setup?next=${encodeURIComponent(intendedNext)}`
         } else {
           next = intendedNext
@@ -170,13 +191,25 @@ function OAuthFinishPage() {
             {stage === 'error' && (
               <>
                 <h1 className="text-3xl font-bold tracking-[-0.03em] mb-3">
-                  {search.error ? 'Setup failed' : 'Sign-in failed'}
+                  {search.error === 'sweep_failed'
+                    ? 'Wallet sweep failed'
+                    : search.error
+                      ? 'Setup failed'
+                      : 'Sign-in failed'}
                 </h1>
                 <p className="text-lh-text-dim text-base mb-6">
                   {error ?? 'Unknown error during sign-in.'}
                 </p>
                 <a
-                  href={search.error ? '/memwal-setup' : '/auth'}
+                  href={
+                    search.error === 'predict_failed'
+                      ? '/predict-setup'
+                      : search.error === 'sweep_failed'
+                        ? '/portfolio'
+                        : search.error
+                          ? '/memwal-setup'
+                          : '/auth'
+                  }
                   className="inline-flex items-center gap-2 rounded-full bg-lh-accent text-lh-bg font-semibold text-sm px-5 py-2.5"
                 >
                   Try again
