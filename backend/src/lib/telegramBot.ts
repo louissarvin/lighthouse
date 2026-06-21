@@ -237,6 +237,7 @@ function registerHandlers(bot: Bot): void {
   bot.command('anchor', anchorCommand);
   bot.command('trade', tradeCommand);
   bot.command('deposit', depositCommand);
+  bot.command('sweep', sweepCommand);
   bot.command('predict', predictCommand);
   bot.command('positions', positionsCommand);
   bot.command('setup', setupCommand);
@@ -314,6 +315,7 @@ function registerHandlers(bot: Bot): void {
     { command: 'anchor',     description: 'Pin text to Walrus with an on-chain proof' },
     { command: 'trade',      description: 'Place a DeepBook limit order' },
     { command: 'deposit',    description: 'Deposit SUI into your BalanceManager' },
+    { command: 'sweep',      description: 'Move SUI from your wallet to your BalanceManager' },
     { command: 'revoke',     description: 'Revoke an agent, key, or session' },
     { command: 'logout',     description: 'Disconnect this telegram from your Sui address (assets stay safe)' },
   ]).catch((e: unknown) => console.warn('[bot] setMyCommands failed:', (e as Error).message));
@@ -509,6 +511,7 @@ async function helpCommand(ctx: Context): Promise<void> {
     `━━━ 🏦 *Trading* ━━━\n` +
     `/trade — Place a DeepBook limit order\n` +
     `/deposit — Fund your BalanceManager with SUI\n` +
+    `/sweep — Move SUI from your wallet to BalanceManager\n` +
     `/balance — BalanceManager coin balances\n` +
     `/budget — Per-trade & daily spending limits\n` +
     `/trades — Last 10 limit orders\n\n` +
@@ -1015,9 +1018,12 @@ async function balanceCommand(ctx: Context): Promise<void> {
     } else {
       for (const b of bmBalances) {
         const label = b.coin.padEnd(8);
-        const val   = b.coin === 'SUI'
-          ? fmtSui(BigInt(Math.round(Number(b.balance))))
-          : fmtDusdc(BigInt(Math.round(Number(b.balance))));
+        // `getManagerBalance` (DeepBook SDK `checkManagerBalance`) returns a
+        // HUMAN-DECIMAL string (e.g. "2.1" SUI, "100.5" DBUSDC) — NOT raw MIST.
+        // Previously this code was wrapping it in BigInt and dividing by 1e9
+        // again, so a real BM balance of 2.1 SUI displayed as 0.000000.
+        const human = Number(b.balance);
+        const val = Number.isFinite(human) ? human.toFixed(6) : '0.000000';
         text += `  ${label}  ${val}\n`;
       }
     }
@@ -2102,8 +2108,29 @@ async function depositCommand(ctx: Context): Promise<void> {
   const args = ctx.message?.text?.split(/\s+/).slice(1) ?? [];
   const amountStr = args[0];
   if (!amountStr) {
+    // Probe wallet balance so we can surface the sweep path when SUI is
+    // already sitting in the user's bound address (a common mistake).
+    let walletSuiHint = '';
+    try {
+      const rpc = suiRpc as unknown as {
+        getBalance: (a: { owner: string; coinType?: string }) => Promise<{ totalBalance: string }>;
+      };
+      const bal = await rpc.getBalance({ owner: profile.sui_address });
+      const totalMist = BigInt(bal.totalBalance);
+      if (totalMist > 50_000_000n) {
+        const suiDisplay = (Number(totalMist) / 1e9).toFixed(4);
+        const executorAddr = getExecutorKeypair().toSuiAddress();
+        walletSuiHint =
+          `\n\nℹ️ Your wallet already holds ${suiDisplay} SUI. ` +
+          `Use /sweep to move it to your BalanceManager in one tap, ` +
+          `or send fresh SUI to the executor:\n\`${executorAddr}\``;
+      }
+    } catch {
+      // Best-effort hint — never block the command on RPC issues.
+    }
     await ctx.reply(
-      'Usage: /deposit <amount>\nExample: /deposit 2.5\n\nMinimum: 0.1 SUI',
+      `Usage: /deposit <amount>\nExample: /deposit 2.5\n\nMinimum: 0.1 SUI${walletSuiHint}`,
+      { parse_mode: 'Markdown' },
     );
     return;
   }
@@ -2141,6 +2168,79 @@ async function depositCommand(ctx: Context): Promise<void> {
       `\`${boundAddr}\`\n\n` +
       `Step 2 — After sending, tap the button below.\n` +
       `_(After this, future deposits won't need Google sign-in.)_`,
+    { parse_mode: 'Markdown', reply_markup: kb },
+  );
+}
+
+// =============================================================================
+// /sweep — move SUI sitting in the user's bound wallet to their BalanceManager.
+// =============================================================================
+//
+// Use case: user accidentally sent SUI to their own zkLogin-bound address
+// (instead of the executor). The auto-sweep worker can't move it because the
+// coin is owned by the user, not the executor. This command builds an OAuth
+// flow that calls DepositService.depositViaZkLogin server-side: the user
+// signs as themselves via zkLogin, the SUI lands in the BM.
+//
+// We reserve 0.05 SUI in the wallet so the address keeps a non-zero balance
+// for any future unsponsored ops it might need.
+async function sweepCommand(ctx: Context): Promise<void> {
+  const resolved = await resolveDepositProfile(ctx);
+  if (!resolved) return;
+  const { tgHash, profile } = resolved;
+
+  const RESERVE_MIST = 50_000_000n; // 0.05 SUI
+
+  let totalMist: bigint;
+  try {
+    const rpc = suiRpc as unknown as {
+      getBalance: (a: { owner: string; coinType?: string }) => Promise<{ totalBalance: string }>;
+    };
+    const bal = await rpc.getBalance({ owner: profile.sui_address });
+    totalMist = BigInt(bal.totalBalance);
+  } catch (e) {
+    console.error('[bot/sweep] getBalance failed:', e);
+    await ctx.reply(
+      'Could not reach the Sui RPC to check your wallet balance. Please try again in a moment.',
+    );
+    return;
+  }
+
+  if (totalMist <= RESERVE_MIST) {
+    const executorAddr = getExecutorKeypair().toSuiAddress();
+    const have = (Number(totalMist) / 1e9).toFixed(4);
+    await ctx.reply(
+      `Your wallet currently holds ${have} SUI — below the 0.05 SUI sweep ` +
+        `minimum.\n\nIf you want to add funds, send SUI from your Slush ` +
+        `wallet directly to the executor (auto-credited within ~30s):\n\n` +
+        `\`${executorAddr}\``,
+      { parse_mode: 'Markdown' },
+    );
+    return;
+  }
+
+  const sweepMist = totalMist - RESERVE_MIST;
+  const sweepDisplay = (Number(sweepMist) / 1e9).toFixed(4);
+
+  let oauthUrl: string;
+  try {
+    const flow = await buildTelegramOAuthFlow(tgHash, {
+      action: 'sweep_to_bm',
+      action_meta: { traderProfileId: profile.id },
+      ttlMs: 10 * 60 * 1000,
+    });
+    oauthUrl = flow.oauthUrl;
+  } catch (e) {
+    console.error('[bot/sweep] OAuth build failed:', e);
+    await ctx.reply('Could not generate sign-in link. Please try again or contact support.');
+    return;
+  }
+
+  const kb = new InlineKeyboard().url('🔐 Sign in with Google', oauthUrl);
+  await ctx.reply(
+    `💸 Move *${sweepDisplay} SUI* from your wallet → BalanceManager.\n\n` +
+      `Tap to sign in with Google (one-shot, ~10s). We'll leave 0.05 SUI ` +
+      `in your wallet as a reserve.`,
     { parse_mode: 'Markdown', reply_markup: kb },
   );
 }
