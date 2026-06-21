@@ -100,6 +100,128 @@ async function assertTxSuccess(
 }
 
 // =============================================================================
+// depositDusdcIntoExistingManager (internal helper)
+// =============================================================================
+//
+// Standalone DUSDC deposit into a pre-existing PredictManager. Used by:
+//   - setupPredictViaZkLogin's top-up branch (when profile.predict_manager_id
+//     is set and amountRaw > 0 — the /topup Telegram command)
+//
+// Mirrors the deposit PTB inside setupPredictViaZkLogin (Phase 5) but skips
+// the create_manager + objectChanges parsing because the manager already
+// exists on chain. Looks up a DUSDC coin at the user's bound address with
+// balance >= depositAmount, then runs predict_manager::deposit<DUSDC>.
+
+async function depositDusdcIntoExistingManager(args: {
+  userAddress: string;
+  managerId: string;
+  depositAmount: bigint;
+  jwt: string;
+  zklState: ZkLoginNonceState;
+}): Promise<string> {
+  if (args.depositAmount <= 0n) {
+    throw new Error('[predict-topup] depositAmount must be positive');
+  }
+
+  // ── 1. Find a DUSDC coin at the user's bound address with sufficient balance.
+  const ownedRpc = suiRpc as unknown as {
+    getOwnedObjects: (params: {
+      owner: string;
+      filter?: { StructType?: string };
+      options?: { showContent?: boolean };
+    }) => Promise<{
+      data?: Array<{
+        data?: {
+          objectId?: string;
+          version?: string;
+          digest?: string;
+          content?: { fields?: { balance?: string } };
+        };
+      }>;
+    }>;
+  };
+
+  const dusdcStructType = `0x2::coin::Coin<${DUSDC_TYPE_TAG}>`;
+  const resp = await ownedRpc.getOwnedObjects({
+    owner: args.userAddress,
+    filter: { StructType: dusdcStructType },
+    options: { showContent: true },
+  });
+
+  const candidates = (resp.data ?? [])
+    .filter((c) => {
+      const bal = c.data?.content?.fields?.balance;
+      return (
+        !!c.data?.objectId &&
+        !!c.data?.version &&
+        !!c.data?.digest &&
+        bal != null &&
+        BigInt(bal) >= args.depositAmount
+      );
+    })
+    .sort((a, b) => {
+      const ba = BigInt(b.data?.content?.fields?.balance ?? '0');
+      const aa = BigInt(a.data?.content?.fields?.balance ?? '0');
+      return ba > aa ? 1 : ba < aa ? -1 : 0;
+    });
+
+  const coinEntry = candidates[0]?.data;
+  if (!coinEntry?.objectId || !coinEntry.version || !coinEntry.digest) {
+    throw new Error(
+      `[predict-topup] No DUSDC coin with balance >= ${args.depositAmount.toString()} raw units found at ${args.userAddress}. ` +
+        `Send more DUSDC to this address from your wallet and try again.`,
+    );
+  }
+
+  // ── 2. Resolve the existing manager's initialSharedVersion on-chain.
+  const mgrInitialVersion = await fetchInitialSharedVersion(
+    SUI_RPC_URL,
+    args.managerId,
+  );
+  if (mgrInitialVersion === null) {
+    throw new Error(
+      `[predict-topup] could not resolve initialSharedVersion for manager ${args.managerId}`,
+    );
+  }
+
+  // ── 3. Build + execute the deposit PTB (sponsored, signed by zkLogin user).
+  const depositTx = new Transaction();
+  depositTx.moveCall({
+    target: `${PREDICT_PACKAGE_ID}::predict_manager::deposit`,
+    typeArguments: [DUSDC_TYPE_TAG],
+    arguments: [
+      depositTx.sharedObjectRef({
+        objectId: args.managerId,
+        initialSharedVersion: mgrInitialVersion,
+        mutable: true,
+      }),
+      depositTx.objectRef({
+        objectId: coinEntry.objectId,
+        version: coinEntry.version,
+        digest: coinEntry.digest,
+      }),
+    ],
+  });
+  depositTx.setSender(args.userAddress);
+
+  const sponsored = await sponsorForAddress(depositTx, args.userAddress);
+  const exec = await executeSponsoredAsZkLoginUser({
+    sponsored,
+    state: args.zklState,
+    jwt: args.jwt,
+  });
+
+  await assertTxSuccess(exec.digest, '[predict-topup]', true);
+
+  console.log(
+    `[predict-topup] OK manager=${args.managerId.slice(0, 10)}… ` +
+      `amount=${args.depositAmount.toString()} digest=${exec.digest.slice(0, 12)}…`,
+  );
+
+  return exec.digest;
+}
+
+// =============================================================================
 // setupPredictViaZkLogin
 // =============================================================================
 
@@ -145,17 +267,33 @@ export async function setupPredictViaZkLogin(
     );
   }
 
-  // Idempotency: if the manager is already set return immediately without
-  // touching the chain. Both the web flow and the Telegram flow call this;
-  // retries or double-triggers must be safe.
-  if (profile.predict_manager_id) {
-    console.log(
-      `[predict-setup] already set up for profile=${profile.id} manager=${profile.predict_manager_id.slice(0, 10)}… — returning early`,
-    );
-    return { digest: 'already-set-up', predictManagerId: profile.predict_manager_id };
-  }
-
   const userAddress = profile.sui_address;
+
+  // Idempotency / top-up branch: if the manager already exists, we can still
+  // be asked to deposit more DUSDC (the /topup Telegram command, or a repeat
+  // setup attempt after a partial failure). When amountRaw is 0 there is
+  // nothing to do; return early. When amountRaw > 0 we skip create_manager
+  // but still run the deposit PTB against the existing PredictManager.
+  if (profile.predict_manager_id) {
+    if (depositAmount === 0n) {
+      console.log(
+        `[predict-setup] already set up for profile=${profile.id} manager=${profile.predict_manager_id.slice(0, 10)}… and no top-up requested — returning early`,
+      );
+      return { digest: 'already-set-up', predictManagerId: profile.predict_manager_id };
+    }
+
+    console.log(
+      `[predict-setup] existing manager ${profile.predict_manager_id.slice(0, 10)}… top-up requested for profile=${profile.id} amountRaw=${depositAmount.toString()}`,
+    );
+    const topUpDigest = await depositDusdcIntoExistingManager({
+      userAddress,
+      managerId: profile.predict_manager_id,
+      depositAmount,
+      jwt: args.jwt,
+      zklState: args.zklState,
+    });
+    return { digest: topUpDigest, predictManagerId: profile.predict_manager_id };
+  }
 
   // ── Phase 1 (conditional): Find a DUSDC coin for the initial deposit ──────
   // Skipped when depositAmount is 0n (web onboarding — user funds later via

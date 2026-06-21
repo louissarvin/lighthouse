@@ -357,6 +357,16 @@ export const oauthRoutes: FastifyPluginCallback = (app: FastifyInstance, _opts, 
               throw new Error('predict_setup action_meta missing traderProfileId or amountRaw');
             }
             const amountRaw = BigInt(meta.amountRaw);
+
+            // Detect top-up vs initial setup before invoking the service so we
+            // can tailor the Telegram DM copy. The service auto-routes either
+            // way (create_manager + deposit OR just deposit on existing PM).
+            const existingProfile = await prismaQuery.traderProfile.findUnique({
+              where: { id: meta.traderProfileId },
+              select: { predict_manager_id: true },
+            });
+            const isTopUp = Boolean(existingProfile?.predict_manager_id);
+
             const { setupPredictViaZkLogin } = await import('../services/PredictService.ts');
             const r = await setupPredictViaZkLogin({
               traderProfileId: meta.traderProfileId,
@@ -370,10 +380,10 @@ export const oauthRoutes: FastifyPluginCallback = (app: FastifyInstance, _opts, 
               predictManagerId: r.predictManagerId,
             };
             console.log(
-              `[oauth/predict_setup] success for ${suiAddress.slice(0, 10)}… digest=${r.digest.slice(0, 12)}…`,
+              `[oauth/predict_setup] ${isTopUp ? 'top-up' : 'initial-setup'} success for ${suiAddress.slice(0, 10)}… digest=${r.digest.slice(0, 12)}…`,
             );
 
-            // Best-effort: push setup confirmation directly to the user's Telegram chat.
+            // Best-effort: push confirmation directly to the user's Telegram chat.
             try {
               const tgUser = await prismaQuery.telegramUser.findFirst({
                 where: { telegram_user_id_hash: nonce.telegram_user_id_hash },
@@ -381,11 +391,18 @@ export const oauthRoutes: FastifyPluginCallback = (app: FastifyInstance, _opts, 
               });
               if (tgUser?.telegram_chat_id) {
                 const { getTelegramBot } = await import('../lib/telegramBot.ts');
+                const dusdcHuman = (Number(amountRaw) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 });
+                const message = isTopUp
+                  ? `✅ Top-up complete!\n\n` +
+                    `${dusdcHuman} DUSDC moved from your wallet → PredictManager.\n` +
+                    `Tx: ${r.digest}\n\n` +
+                    `Use /predict to place a prediction.`
+                  : `✅ Your DeepBook Predict account is ready!\n\n` +
+                    `Your PredictManager has been created and funded with DUSDC.\n\n` +
+                    `Use /predict to see live BTC markets and place your first prediction.`;
                 await getTelegramBot().sendMessage(
                   Number(tgUser.telegram_chat_id),
-                  `✅ Your DeepBook Predict account is ready!\n\n` +
-                  `Your PredictManager has been created and funded with DUSDC.\n\n` +
-                  `Use /predict to see live BTC markets and place your first prediction.`,
+                  message,
                 );
               }
             } catch (notifyErr) {
