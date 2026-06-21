@@ -233,6 +233,7 @@ function registerHandlers(bot: Bot): void {
   bot.command('pnl', pnlCommand);
   bot.command('tearsheet', tearsheetCommand);
   bot.command('revoke', revokeCommand);
+  bot.command('logout', logoutCommand);
   bot.command('anchor', anchorCommand);
   bot.command('trade', tradeCommand);
   bot.command('deposit', depositCommand);
@@ -258,6 +259,10 @@ function registerHandlers(bot: Bot): void {
   bot.callbackQuery('revoke:memwal', revokeMemwalCallback);
   bot.callbackQuery('revoke:session', revokeSessionCallback);
   bot.callbackQuery('revoke:cancel', revokeCancelCallback);
+
+  // Logout callbacks: confirm clears telegram_chat_id (soft logout, preserves
+  // TelegramUser + TraderProfile rows for audit and asset safety).
+  bot.callbackQuery(/^logout:/, logoutCallback);
 
   // Coach reply anchor: when the user taps "💾 Save & Anchor" on a coach
   // message, upload the reply to Walrus + emit an on-chain AuditAnchor.
@@ -310,6 +315,7 @@ function registerHandlers(bot: Bot): void {
     { command: 'trade',      description: 'Place a DeepBook limit order' },
     { command: 'deposit',    description: 'Deposit SUI into your BalanceManager' },
     { command: 'revoke',     description: 'Revoke an agent, key, or session' },
+    { command: 'logout',     description: 'Disconnect this telegram from your Sui address (assets stay safe)' },
   ]).catch((e: unknown) => console.warn('[bot] setMyCommands failed:', (e as Error).message));
 }
 
@@ -514,6 +520,7 @@ async function helpCommand(ctx: Context): Promise<void> {
     `━━━ 🔧 *Tools* ━━━\n` +
     `/anchor — Pin text to Walrus + on-chain proof\n` +
     `/revoke — Revoke agent / key / session\n` +
+    `/logout — Disconnect this telegram from your Sui address (assets stay safe)\n` +
     `/start — Re-onboard or refresh auth\n\n` +
     `💬 *Any other message* → forwarded to AI coach\n` +
     `Every coach reply has a 💾 *Save & Anchor* button to record the advice on-chain.\n\n` +
@@ -1183,6 +1190,110 @@ async function revokeSessionCallback(ctx: Context): Promise<void> {
 async function revokeCancelCallback(ctx: Context): Promise<void> {
   await ctx.answerCallbackQuery({ text: 'Cancelled' });
   await ctx.editMessageText('Cancelled. Nothing was revoked.');
+}
+
+// =============================================================================
+// /logout — soft logout: nullify telegram_chat_id, preserve audit trail
+// =============================================================================
+//
+// On-chain assets (BalanceManager, ExecutorAgent, MemWal, positions) are tied
+// to `sui_address`, NOT to the Telegram binding. Logout therefore only clears
+// `telegram_chat_id` on the TelegramUser row — the row itself + the linked
+// TraderProfile + all derived state stay intact. A future /start with the
+// same Google account will re-bind the chat id without losing anything.
+
+async function logoutCommand(ctx: Context): Promise<void> {
+  if (!ctx.from?.id) return;
+  const tgHash = hashTelegramUserId(ctx.from.id);
+  const user = await prismaQuery.telegramUser.findUnique({
+    where: { telegram_user_id_hash: tgHash },
+    select: { id: true },
+  });
+  if (!user) {
+    await ctx.reply("You're not signed in. Use /start to sign in.");
+    return;
+  }
+
+  const kb = new InlineKeyboard()
+    .text('Yes, log me out', 'logout:confirm')
+    .text('Cancel', 'logout:cancel');
+
+  await ctx.reply(
+    '⚠️ *Disconnect this account?*\n\n' +
+      'This unbinds your current Sui address from this Telegram chat. ' +
+      'Your on-chain assets (BalanceManager, ExecutorAgent, MemWal, positions) ' +
+      'stay yours — only the Telegram binding is cleared.\n\n' +
+      "After logout, run /start to sign in with a different Google account (you'll get a fresh Sui address).",
+    { parse_mode: 'Markdown', reply_markup: kb },
+  );
+}
+
+async function logoutCallback(ctx: Context): Promise<void> {
+  const data = ctx.callbackQuery?.data ?? '';
+  const action = data.replace(/^logout:/, '');
+
+  if (action === 'cancel') {
+    await ctx.answerCallbackQuery({ text: 'Cancelled' });
+    try {
+      await ctx.editMessageText('Logout cancelled.');
+    } catch (e) {
+      console.warn('[bot/logout] edit failed:', (e as Error).message);
+    }
+    return;
+  }
+
+  if (action !== 'confirm') {
+    await ctx.answerCallbackQuery();
+    return;
+  }
+
+  if (!ctx.from?.id) {
+    await ctx.answerCallbackQuery({ text: 'Could not identify user.' });
+    return;
+  }
+  const tgHash = hashTelegramUserId(ctx.from.id);
+
+  try {
+    // Hard delete the TelegramUser binding row. This is the correct behavior
+    // for "I want to bind a different Google account on this Telegram":
+    //
+    //   - The TraderProfile row (and all on-chain assets — BalanceManager,
+    //     ExecutorAgent, MemWal account, positions, tearsheets) is keyed by
+    //     `sui_address` and stays intact. The user can always recover access
+    //     to those assets by signing in with their ORIGINAL Google account.
+    //
+    //   - The TelegramUser row exists ONLY as the binding between
+    //     telegram_user_id_hash and trader_profile_id. Both fields are
+    //     @unique, so soft-deleting it would still trip the unique constraint
+    //     when /start tries to re-bind to a different TraderProfile.
+    //     Hard delete is the only way to allow a clean re-binding.
+    //
+    //   - deleteMany is idempotent: 0 rows on retry is fine.
+    const res = await prismaQuery.telegramUser.deleteMany({
+      where: { telegram_user_id_hash: tgHash },
+    });
+    console.log(
+      `[bot/logout] deleted ${res.count} TelegramUser row(s) for hash ${tgHash.slice(0, 8)}…`,
+    );
+    await ctx.answerCallbackQuery({ text: 'Logged out' });
+    try {
+      await ctx.editMessageText(
+        '✅ *Logged out.* Run /start to sign in with a different Google account.\n\n' +
+          '_Your on-chain assets (BalanceManager, ExecutorAgent, MemWal, positions) ' +
+          'are still tied to your original Sui address — sign in with that Google ' +
+          'account again to recover them._',
+        { parse_mode: 'Markdown' },
+      );
+    } catch (e) {
+      console.warn('[bot/logout] edit on confirm failed:', (e as Error).message);
+    }
+  } catch (e) {
+    console.error('[bot/logout] db delete failed:', (e as Error).message);
+    await ctx.answerCallbackQuery({
+      text: 'Logout failed — try again or DM the operator.',
+      show_alert: true,
+    });
+  }
 }
 
 async function coachForward(ctx: Context): Promise<void> {
