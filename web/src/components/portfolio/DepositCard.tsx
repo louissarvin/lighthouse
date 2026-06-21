@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import type {
+  AgentBalancesResponse,
   DepositInstantResponse,
   PendingDepositCreatedResponse,
   PendingDepositRow,
@@ -99,6 +100,40 @@ export function DepositCard({ profile }: Props) {
     enabled: !!profile,
   })
 
+  // Balances tell us if the user accidentally has SUI in their bound wallet
+  // (instead of having sent it to the executor). When that's the case we
+  // offer a one-click "sweep wallet → BM" CTA that signs as the user via
+  // zkLogin and deposits everything minus a 0.05 SUI reserve.
+  const { data: balances } = useQuery<AgentBalancesResponse>({
+    queryKey: ['agent', 'balances'],
+    queryFn: () => apiFetch<AgentBalancesResponse>('/agent/balances'),
+    refetchInterval: 15_000,
+    staleTime: 10_000,
+    enabled: !!profile,
+  })
+
+  const walletSui = balances?.wallet?.sui ? parseFloat(balances.wallet.sui) : 0
+  const showSweepCta = walletSui > 0.05 && hasBalanceManager
+
+  const [sweepStarting, setSweepStarting] = useState(false)
+  const [sweepStartError, setSweepStartError] = useState<string | null>(null)
+
+  async function startSweep() {
+    setSweepStartError(null)
+    setSweepStarting(true)
+    try {
+      const resp = await apiFetch<{ oauthUrl: string }>('/auth/web/start', {
+        method: 'POST',
+        body: { action: 'sweep_to_bm', next: '/portfolio' },
+      })
+      if (!resp?.oauthUrl) throw new Error('Missing OAuth URL from server')
+      window.location.href = resp.oauthUrl
+    } catch (e) {
+      setSweepStartError((e as Error).message ?? 'Could not start sweep')
+      setSweepStarting(false)
+    }
+  }
+
   // Instant deposit mutation
   const instantMutation = useMutation({
     mutationFn: async () => {
@@ -165,6 +200,40 @@ export function DepositCard({ profile }: Props) {
       <h3 className="text-lg font-semibold mb-1">
         Add SUI to your Balance Manager
       </h3>
+
+      {/* Wallet-sweep CTA — shown only when SUI is sitting in the user's bound
+          zkLogin wallet (not the executor). One click + Google bounce moves it
+          to the BalanceManager. */}
+      {showSweepCta && (
+        <div className="mb-6 rounded-xl border border-lh-accent/30 bg-lh-accent/5 p-4">
+          <p className="text-sm text-lh-text mb-1 font-semibold">
+            You have {walletSui.toFixed(4)} SUI in your wallet
+          </p>
+          <p className="text-xs text-lh-text-dim mb-3">
+            Move it to your BalanceManager in one click. We'll leave 0.05 SUI
+            in your wallet as a gas reserve.
+          </p>
+          <button
+            type="button"
+            onClick={() => void startSweep()}
+            disabled={sweepStarting}
+            className={cnm(
+              'w-full rounded-full py-2.5 text-sm font-semibold transition-colors',
+              'bg-lh-accent text-lh-bg hover:bg-lh-accent-warm',
+              sweepStarting && 'opacity-50 cursor-not-allowed',
+            )}
+          >
+            {sweepStarting
+              ? 'Redirecting to Google…'
+              : `Sweep ${(walletSui - 0.05).toFixed(4)} SUI to BalanceManager`}
+          </button>
+          {sweepStartError && (
+            <p className="mt-2 text-xs text-red-400" role="alert">
+              {sweepStartError}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Executor address display */}
       <div className="mb-6 mt-4">
