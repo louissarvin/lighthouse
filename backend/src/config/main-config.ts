@@ -237,8 +237,13 @@ export const COACH_GUARDIAN_MAX_SLIPPAGE_BPS: number =
   Number(process.env.COACH_GUARDIAN_MAX_SLIPPAGE_BPS) || 100;
 export const COACH_GUARDIAN_MARKET_FRESHNESS_MS: number =
   Number(process.env.COACH_GUARDIAN_MARKET_FRESHNESS_MS) || 5000;
+// Public Sui testnet RPC throttles aggressively; 3s polls × N tracked events
+// blew through the quota and caused unrelated tx submissions (e.g. MemWal
+// bootstrap) to fail with 429 RESOURCE_EXHAUSTED. 15s is safe on free tier;
+// drop lower only when SUI_RPC_URL points at a private endpoint (Triton,
+// Shinami, Mysten enterprise).
 export const EVENT_INDEXER_RECONNECT_MS: number =
-  Number(process.env.EVENT_INDEXER_RECONNECT_MS) || 3000;
+  Number(process.env.EVENT_INDEXER_RECONNECT_MS) || 15_000;
 
 // === Error Log Configuration ===
 

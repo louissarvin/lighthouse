@@ -269,7 +269,26 @@ export async function bootstrapMemWalViaZkLogin(args: {
     maxEpoch: args.zklState.maxEpoch,
   });
 
+  // Detect transient rate-limit / resource-exhausted errors that Sui public
+  // testnet returns under load. Retry with exponential backoff instead of
+  // failing the whole onboarding for one throttled call.
+  const isTransientRateLimit = (e: unknown): boolean => {
+    const msg = (e as Error)?.message?.toLowerCase() ?? '';
+    const code = (e as { code?: string })?.code ?? '';
+    return (
+      msg.includes('429') ||
+      msg.includes('too many requests') ||
+      msg.includes('resource_exhausted') ||
+      msg.includes('resource exhausted') ||
+      msg.includes('unavailable') ||
+      code === 'RESOURCE_EXHAUSTED' ||
+      code === 'UNAVAILABLE'
+    );
+  };
+
   // Helper: build tx, dual-sign (user zkLogin + coach gas), execute.
+  // Retries up to 5× on 429/RESOURCE_EXHAUSTED with exponential backoff
+  // (1s → 2s → 4s → 8s → 16s). Other errors propagate immediately.
   const executeWithCoachGas = async (tx: Transaction): Promise<string> => {
     tx.setSender(profile.sui_address);
     tx.setGasOwner(coach.toSuiAddress());
@@ -287,14 +306,29 @@ export async function bootstrapMemWalViaZkLogin(args: {
     // Coach co-signs as gas owner.
     const { signature: coachSig } = await coach.signTransaction(bytes);
 
-    const res = (await suiGrpc.executeTransaction({
-      transaction: bytes,
-      signatures: [wrappedZk, coachSig],
-    })) as { Transaction?: { digest?: string }; digest?: string };
-
-    const digest = res.Transaction?.digest ?? res.digest ?? '';
-    if (!digest) throw new Error('[memwal-bootstrap] executeWithCoachGas returned no digest');
-    return digest;
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        const res = (await suiGrpc.executeTransaction({
+          transaction: bytes,
+          signatures: [wrappedZk, coachSig],
+        })) as { Transaction?: { digest?: string }; digest?: string };
+        const digest = res.Transaction?.digest ?? res.digest ?? '';
+        if (!digest) throw new Error('[memwal-bootstrap] executeWithCoachGas returned no digest');
+        return digest;
+      } catch (e) {
+        lastErr = e;
+        if (!isTransientRateLimit(e)) throw e;
+        const backoffMs = Math.min(1000 * Math.pow(2, attempt), 16_000);
+        console.warn(
+          `[memwal-bootstrap] executeTransaction 429/RESOURCE_EXHAUSTED — retry ${attempt + 1}/5 after ${backoffMs}ms`,
+        );
+        await new Promise((r) => setTimeout(r, backoffMs));
+      }
+    }
+    throw new Error(
+      `[memwal-bootstrap] executeWithCoachGas exhausted 5 retries on rate-limit: ${(lastErr as Error)?.message ?? String(lastErr)}`,
+    );
   };
 
   // ── PTB 1: account::create_account (user is sender → account in user's registry slot) ──

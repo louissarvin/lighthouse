@@ -364,8 +364,26 @@ export async function startEventIndexer(): Promise<void> {
         anyAdvanced = anyAdvanced || advanced;
         totalDeadLettered += deadLettered;
       } catch (e) {
-        console.error(`[EventIndexer] pollOnce(${t.id}) failed:`, e);
-        await sleep(EVENT_INDEXER_RECONNECT_MS);
+        // On 429/RESOURCE_EXHAUSTED back off MUCH longer than normal — public
+        // testnet quota is tight; hammering it makes user-facing tx submissions
+        // (MemWal bootstrap, place_limit, deposit_with_cap) fail in parallel.
+        const msg = (e as Error)?.message?.toLowerCase() ?? '';
+        const code = (e as { code?: string })?.code ?? '';
+        const rateLimited =
+          msg.includes('429') ||
+          msg.includes('too many requests') ||
+          msg.includes('resource_exhausted') ||
+          msg.includes('resource exhausted') ||
+          code === 'RESOURCE_EXHAUSTED';
+        if (rateLimited) {
+          console.warn(
+            `[EventIndexer] pollOnce(${t.id}) rate-limited, backing off 60s`,
+          );
+          await sleep(60_000);
+        } else {
+          console.error(`[EventIndexer] pollOnce(${t.id}) failed:`, e);
+          await sleep(EVENT_INDEXER_RECONNECT_MS);
+        }
       }
     }
     if (totalDeadLettered > 0) {
