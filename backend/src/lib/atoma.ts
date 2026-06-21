@@ -245,11 +245,27 @@ export async function chatCreateConfidential(
 
 /**
  * Streaming chat completion. Yields each token chunk as it arrives.
+ *
+ * Same provider precedence as `chatCreate`: Groq → Atoma → throw. Critical
+ * for the demo because the public /coach/chat SSE endpoint silently errored
+ * with "ATOMASDK_BEARER_AUTH not set" while Groq was already configured.
  */
 export async function* chatCreateStream(
   messages: ChatMessage[],
   opts: ChatOptions = {},
 ): AsyncGenerator<string, void, void> {
+  if (GROQ_API_KEY) {
+    yield* groqChatCreateStream(messages, opts);
+    return;
+  }
+
+  if (!ATOMASDK_BEARER_AUTH) {
+    throw new Error(
+      '[chat-stream] no LLM provider configured. Set GROQ_API_KEY (recommended for demo) ' +
+        'or ATOMASDK_BEARER_AUTH (production) in .env.',
+    );
+  }
+
   const atoma = getAtoma();
   const stream = await atoma.chat.createStream({
     model: opts.model ?? ATOMA_DEFAULT_MODEL,
@@ -266,6 +282,84 @@ export async function* chatCreateStream(
     };
     const chunk = ev.choices?.[0]?.delta?.content ?? '';
     if (chunk) yield chunk;
+  }
+}
+
+/**
+ * Groq streaming via the OpenAI-compatible SSE endpoint. Reads chunked
+ * `data: { ... }` frames, yields the delta text from each. Terminates on
+ * `data: [DONE]` per the OpenAI streaming spec.
+ *
+ * Doc: https://console.groq.com/docs/api-reference#chat-create
+ */
+async function* groqChatCreateStream(
+  messages: ChatMessage[],
+  opts: ChatOptions = {},
+): AsyncGenerator<string, void, void> {
+  const model =
+    opts.model && !opts.model.includes('meta-llama')
+      ? opts.model
+      : GROQ_DEFAULT_MODEL;
+
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${GROQ_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature: opts.temperature ?? 0.3,
+      max_tokens: opts.maxCompletionTokens ?? 2000,
+      stream: true,
+      ...(opts.responseFormatJson ? { response_format: { type: 'json_object' } } : {}),
+    }),
+  });
+
+  if (!res.ok || !res.body) {
+    const errText = await res.text().catch(() => res.statusText);
+    throw new Error(
+      `[groq-stream] ${res.status} ${res.statusText}: ${errText.slice(0, 200)}`,
+    );
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buf = '';
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      // SSE frames are separated by \n\n. Each frame may contain `data: { ... }` lines.
+      let sep: number;
+      while ((sep = buf.indexOf('\n\n')) >= 0) {
+        const frame = buf.slice(0, sep).trim();
+        buf = buf.slice(sep + 2);
+        for (const line of frame.split('\n')) {
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (payload === '[DONE]') return;
+          if (!payload) continue;
+          try {
+            const json = JSON.parse(payload) as {
+              choices?: { delta?: { content?: string | null } }[];
+            };
+            const chunk = json.choices?.[0]?.delta?.content ?? '';
+            if (chunk) yield chunk;
+          } catch {
+            // Malformed JSON frame — skip silently per OpenAI spec.
+          }
+        }
+      }
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // already released — ignore
+    }
   }
 }
 

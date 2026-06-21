@@ -351,10 +351,26 @@ export const coachRoutes: FastifyPluginCallback = (app: FastifyInstance, _opts, 
     if (!prompt) {
       return handleValidationError(reply, ['prompt']);
     }
+    // reply.hijack() takes raw socket control AWAY from Fastify, which means
+    // the @fastify/cors plugin never sets the Access-Control-* headers on this
+    // response. Browser fetch() with `credentials: 'include'` then rejects the
+    // response with "Failed to fetch" even though the server returned 200.
+    // Manually echo the request origin (specific, not '*' — required when
+    // credentials are included). Wildcard would be rejected by the browser.
+    const origin = request.headers.origin;
+    const corsHeaders: Record<string, string> = {};
+    if (origin) {
+      corsHeaders['Access-Control-Allow-Origin'] = origin;
+      corsHeaders['Access-Control-Allow-Credentials'] = 'true';
+      corsHeaders['Vary'] = 'Origin';
+    }
     reply.raw.writeHead(200, {
+      ...corsHeaders,
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
+      // Disable nginx-style buffering if the SSE goes through a reverse proxy.
+      'X-Accel-Buffering': 'no',
     });
     reply.hijack();
     const messages: ChatMessage[] = [
